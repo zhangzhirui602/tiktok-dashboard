@@ -1,0 +1,20 @@
+# TikTok Dashboard — direct dependencies
+streamlit>=1.28.0
+python-dotenv>=1.0.0
+requests>=2.31.0
+pandas>=2.0.0
+
+# ─── Notes ────────────────────────────────────────────────────────────────────
+# The following dependencies are provided by the sibling repos and must be
+# installed in the same Python environment:
+#
+#   seedance_mcp:
+#     requests (already listed above)
+#
+#   Video-Editing-FFmpeg-librosa-Whisper-:
+#     openai-whisper, librosa, ffmpeg-python (also requires ffmpeg binary)
+#     Install with: pip install -r ../Video_Editing_FFmpeg_librosa_Whisper/Video-Editing-FFmpeg-librosa-Whisper-/requirements.txt
+#
+#   tiktok-uploader-mcp:
+#     playwright (also run: playwright install chromium)
+#     Install with: pip install -r ../mcp-tiktok-uploader-mcp/tiktok-uploader-mcp/requirements.txt
