@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -141,13 +142,24 @@ class JobState:
     # ── Persistence ──────────────────────────────────────────────────────────
 
     def save(self) -> None:
-        """Atomically write state.json (write to .tmp then rename)."""
+        """Atomically write state.json (write to .tmp then rename).
+
+        On Windows, Defender/Search may briefly lock the destination file
+        right after a write. Retry up to 5 times with short back-off.
+        """
         self._data["updated_at"] = _now()
         state_file = self._job_dir / "state.json"
         tmp_file   = self._job_dir / "state.json.tmp"
         with open(tmp_file, "w", encoding="utf-8") as f:
             json.dump(self._data, f, ensure_ascii=False, indent=2)
-        tmp_file.replace(state_file)
+        for attempt in range(5):
+            try:
+                tmp_file.replace(state_file)
+                return
+            except PermissionError:
+                if attempt == 4:
+                    raise
+                time.sleep(0.05 * (attempt + 1))  # 50ms, 100ms, 150ms, 200ms
 
     # ── Property accessors ───────────────────────────────────────────────────
 
