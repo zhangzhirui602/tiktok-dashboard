@@ -22,6 +22,9 @@ env/
 tmp/
 history.json
 
+# Local media assets
+assets/bgm/
+
 # Sensitive account data
 cookies/
 
