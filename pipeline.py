@@ -25,6 +25,7 @@ import sys
 import time
 import urllib.request
 import asyncio
+import re
 from pathlib import Path
 from typing import Generator
 
@@ -198,41 +199,197 @@ def _ensure_windows_proactor_policy() -> None:
     asyncio.set_event_loop_policy(proactor_cls())
 
 
-def _generate_srt(video_path: Path, audio_path: str | None = None) -> str:
-    """Transcribe the project's audio file to SRT. Returns SRT file path."""
-    _ensure_video_edit_path()
-    from src.config import load_config  # type: ignore[import]
-    from src.transcriber import ensure_srt  # type: ignore[import]
+def _ms_to_srt_time(ms: int) -> str:
+    ms = max(0, ms)
+    h, ms = divmod(ms, 3_600_000)
+    m, ms = divmod(ms, 60_000)
+    s, ms = divmod(ms, 1_000)
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
-    pm = _load_module_from_file(
-        "project_manager", VIDEO_EDIT_ROOT / "cli" / "project_manager.py"
-    )
 
-    ctx = pm.get_context(VIDEO_EDIT_ROOT)
-    cfg = load_config(
-        project_dir=ctx.project_dir, verbose=False, require_videos=False
-    )
+def _srt_time_to_ms(ts: str) -> int:
+    m = re.fullmatch(r"(\d{2}):(\d{2}):(\d{2}),(\d{3})", ts.strip())
+    if not m:
+        raise ValueError(f"Invalid SRT timestamp: {ts}")
+    h, mm, s, ms = (int(g) for g in m.groups())
+    return (((h * 60) + mm) * 60 + s) * 1000 + ms
 
-    effective_audio = audio_path or cfg["audio_path"]
-    if not Path(effective_audio).is_file():
-        raise FileNotFoundError(f"Audio file not found: {effective_audio}")
 
-    srt_path = str(
-        Path(ctx.project_dir)
-        / "raw_materials"
-        / "lyric"
-        / f"{Path(effective_audio).stem}.srt"
-    )
+def _split_words_for_srt(text: str) -> list[str]:
+    # Use whitespace tokenization first; for CJK text without spaces, fall back to per-char.
+    words = [w for w in text.split() if w]
+    if words:
+        return words
+    chars = [c for c in text.strip() if not c.isspace()]
+    return chars
 
-    return ensure_srt(
-        effective_audio,
-        srt_path,
-        cfg["whisper_model"],
-        cfg["language"],
-        cfg.get("split_mode", "word"),
-        cfg["temp_dir"],
-        verbose=False,
-    )
+
+def _expand_srt_to_word_level(srt_text: str) -> str:
+    blocks = re.split(r"\r?\n\r?\n", srt_text.strip())
+    lines: list[str] = []
+    idx = 1
+
+    for block in blocks:
+        raw_lines = [ln.strip() for ln in block.splitlines() if ln.strip()]
+        if len(raw_lines) < 2:
+            continue
+
+        # Accept both with/without numeric index on first line.
+        if re.fullmatch(r"\d+", raw_lines[0]):
+            ts_line = raw_lines[1]
+            text_lines = raw_lines[2:]
+        else:
+            ts_line = raw_lines[0]
+            text_lines = raw_lines[1:]
+
+        if "-->" not in ts_line:
+            continue
+        start_s, end_s = (p.strip() for p in ts_line.split("-->", 1))
+        try:
+            seg_s_ms = _srt_time_to_ms(start_s)
+            seg_e_ms = _srt_time_to_ms(end_s)
+        except ValueError:
+            continue
+
+        if seg_e_ms <= seg_s_ms:
+            seg_e_ms = seg_s_ms + 1
+
+        text = " ".join(text_lines).strip()
+        if not text:
+            continue
+
+        words = _split_words_for_srt(text)
+        if not words:
+            continue
+
+        duration = seg_e_ms - seg_s_ms
+        per_word_ms = max(1, duration // len(words))
+
+        for wi, word in enumerate(words):
+            w_s = seg_s_ms + wi * per_word_ms
+            w_e = w_s + per_word_ms if wi < len(words) - 1 else seg_e_ms
+            lines += [str(idx), f"{_ms_to_srt_time(w_s)} --> {_ms_to_srt_time(w_e)}", word, ""]
+            idx += 1
+
+    if not lines:
+        return srt_text.rstrip() + "\n"
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _run_whisper(
+    audio_path: str,
+    out_srt: Path,
+    model_name: str = "medium",
+    language: str | None = None,
+) -> None:
+    """Transcribe audio with Whisper and write SRT to out_srt.
+    Tries Python API first, falls back to CLI. No sibling-repo dependency.
+
+    Args:
+        model_name: Whisper model size (tiny/base/small/medium/large). Default: medium.
+        language: ISO language code (e.g. "ko", "ja", "en") or None for auto-detect.
+    """
+    import shutil as _shutil
+    import subprocess as _subprocess
+
+    out_srt.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        import whisper as _whisper  # type: ignore[import]
+        model = _whisper.load_model(model_name)
+        transcribe_kwargs: dict = {
+            "fp16": False,
+            "condition_on_previous_text": False,
+            "temperature": 0,
+        }
+        if language:
+            transcribe_kwargs["language"] = language
+        transcribe_kwargs["word_timestamps"] = True
+        result = model.transcribe(str(audio_path), **transcribe_kwargs)
+
+        # Collect all words with per-word timestamps
+        all_words: list[dict] = []
+        for seg in result.get("segments", []):
+            all_words.extend(seg.get("words", []))
+
+        lines: list[str] = []
+        idx = 1
+
+        if all_words:
+            # Word-level SRT: one entry per word with Whisper's precise timestamps
+            for i, w in enumerate(all_words):
+                word = w.get("word", "").strip()
+                if not word:
+                    continue
+                s_ms = int(round(float(w["start"]) * 1000))
+                if i + 1 < len(all_words):
+                    next_s_ms = int(round(float(all_words[i + 1]["start"]) * 1000))
+                    e_ms = max(s_ms + 1, min(int(round(float(w["end"]) * 1000)), next_s_ms - 50))
+                else:
+                    e_ms = max(s_ms + 1, int(round(float(w["end"]) * 1000)))
+                lines += [str(idx), f"{_ms_to_srt_time(s_ms)} --> {_ms_to_srt_time(e_ms)}", word, ""]
+                idx += 1
+        else:
+            # Fallback: Whisper returned no per-word timestamps (common with music/BGM).
+            # Split each segment's text into words and distribute time proportionally.
+            for seg in result.get("segments", []):
+                text = seg["text"].strip()
+                if not text:
+                    continue
+                seg_s_ms = int(round(float(seg["start"]) * 1000))
+                seg_e_ms = max(seg_s_ms + 1, int(round(float(seg["end"]) * 1000)))
+                words = [w for w in text.split() if w]
+                if not words:
+                    continue
+                duration = seg_e_ms - seg_s_ms
+                per_word_ms = duration // len(words)
+                for wi, word in enumerate(words):
+                    w_s = seg_s_ms + wi * per_word_ms
+                    w_e = w_s + per_word_ms if wi < len(words) - 1 else seg_e_ms
+                    lines += [str(idx), f"{_ms_to_srt_time(w_s)} --> {_ms_to_srt_time(w_e)}", word, ""]
+                    idx += 1
+
+        out_srt.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+        return
+    except ImportError:
+        pass  # fall through to CLI
+    except Exception as exc:
+        raise RuntimeError(f"Whisper API failed: {exc}") from exc
+
+    # CLI fallback
+    whisper_cmd = _shutil.which("whisper") or "whisper"
+    cli_cmd = [
+        whisper_cmd, str(audio_path),
+        "--model", model_name,
+        "--output_dir", str(out_srt.parent),
+        "--output_format", "srt",
+        "--condition_on_previous_text", "False",
+        "--word_timestamps", "True",
+    ]
+    if language:
+        cli_cmd += ["--language", language]
+    r = _subprocess.run(cli_cmd, capture_output=True, text=True)
+    if r.returncode != 0:
+        raise RuntimeError(f"whisper CLI failed: {(r.stderr or r.stdout).strip()}")
+
+    # CLI names the file after the audio stem; move to our target path
+    cli_srt = out_srt.parent / f"{Path(audio_path).stem}.srt"
+    if cli_srt.exists() and cli_srt.resolve() != out_srt.resolve():
+        cli_srt.replace(out_srt)  # replace() overwrites on Windows; rename() does not
+    elif not out_srt.exists():
+        srts = sorted(out_srt.parent.glob("*.srt"), key=lambda p: p.stat().st_mtime, reverse=True)
+        if srts:
+            srts[0].replace(out_srt)
+        else:
+            raise FileNotFoundError(f"Whisper CLI completed but no SRT found in {out_srt.parent}")
+
+    # Normalize CLI output to word-level SRT so UI karaoke display can highlight word by word.
+    try:
+        expanded = _expand_srt_to_word_level(out_srt.read_text(encoding="utf-8"))
+        out_srt.write_text(expanded, encoding="utf-8")
+    except Exception:
+        # Keep original CLI output if normalization fails.
+        pass
 
 
 def _run_edit_pipeline(
@@ -572,11 +729,37 @@ def run_job_srt(
     job.set_stage_running("srt")
 
     bgm_path = job.params.get("bgm_path")
+
+    # If no BGM path, extract audio from the merged video so Whisper
+    # always transcribes the actual audio the viewer will hear.
+    audio_for_srt: str | None = bgm_path
+    _extracted: Path | None = None
+    if not audio_for_srt or not Path(audio_for_srt).is_file():
+        import shutil, subprocess
+        extracted = Path(merge_output).with_suffix(".wav")
+        ffmpeg = shutil.which("ffmpeg") or "ffmpeg"
+        r = subprocess.run(
+            [ffmpeg, "-y", "-i", merge_output, "-vn", "-ar", "16000", "-ac", "1", str(extracted)],
+            capture_output=True,
+        )
+        if r.returncode == 0 and extracted.is_file():
+            audio_for_srt = str(extracted)
+            _extracted = extracted
+
+    whisper_model = job.params.get("whisper_model", "medium")
+    whisper_language = job.params.get("whisper_language") or None  # None = auto-detect
+
     try:
-        srt_path = _generate_srt(Path(merge_output), bgm_path)
-        with open(srt_path, encoding="utf-8") as f:
-            srt_content = f.read()
-        job.set_stage_done("srt", srt_path=srt_path, content=srt_content)
+        out_srt = job.job_dir / "subtitle.srt"
+        _run_whisper(audio_for_srt or merge_output, out_srt, model_name=whisper_model, language=whisper_language)
+        srt_path = str(out_srt)
+        srt_content = out_srt.read_text(encoding="utf-8")
+        job.set_stage_done(
+            "srt",
+            srt_path=srt_path,
+            content=srt_content,
+            audio_used=audio_for_srt or "unknown",
+        )
         job.overall_status = STATUS_SRT_REVIEW
         job.save()
         yield ("stage_done", {"stage": "srt", "srt_path": srt_path, "content": srt_content})
@@ -584,6 +767,9 @@ def run_job_srt(
         err = _format_exception(exc)
         job.set_stage_failed("srt", err)
         yield ("stage_failed", {"stage": "srt", "error": err})
+    finally:
+        if _extracted and _extracted.exists():
+            _extracted.unlink(missing_ok=True)
 
 
 def run_job_upload(
