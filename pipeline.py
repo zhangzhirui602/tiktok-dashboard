@@ -772,6 +772,81 @@ def run_job_srt(
             _extracted.unlink(missing_ok=True)
 
 
+def _srt_to_ass(srt_path: str, ass_path: str) -> None:
+    """Convert SRT to ASS with explicit centering and styling."""
+    header = (
+        "[Script Info]\n"
+        "ScriptType: v4.00+\n"
+        "PlayResX: 384\n"
+        "PlayResY: 288\n"
+        "ScaledBorderAndShadow: yes\n\n"
+        "[V4+ Styles]\n"
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
+        "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
+        "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
+        "Alignment, MarginL, MarginR, MarginV, Encoding\n"
+        # Alignment=5 → numpad center (horizontally and vertically centered)
+        # Outline=0, Shadow=0 → no border/shadow
+        # PrimaryColour=&H00FFFFFF → white (ASS uses AABBGGRR order, 00=opaque)
+        "Style: Default,Times New Roman,11,&H00FFFFFF,&H000000FF,"
+        "&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,5,0,0,0,1\n\n"
+        "[Events]\n"
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+    )
+
+    def _srt_time_to_ass(t: str) -> str:
+        # SRT:  00:00:01,500  →  ASS:  0:00:01.50
+        t = t.strip().replace(",", ".")
+        h, m, rest = t.split(":", 2)
+        s, ms = rest.split(".")
+        return f"{int(h)}:{m}:{s}.{ms[:2]}"
+
+    srt_text = Path(srt_path).read_text(encoding="utf-8")
+    blocks = re.split(r"\n\s*\n", srt_text.strip())
+    dialogues: list[str] = []
+    for block in blocks:
+        lines = block.strip().splitlines()
+        if len(lines) < 3:
+            continue
+        try:
+            start, end = lines[1].split(" --> ")
+            start_ass = _srt_time_to_ass(start)
+            end_ass   = _srt_time_to_ass(end)
+            text = r"\N".join(line.strip() for line in lines[2:])
+            dialogues.append(f"Dialogue: 0,{start_ass},{end_ass},Default,,0,0,0,,{text}")
+        except Exception:
+            continue
+
+    Path(ass_path).write_text(header + "\n".join(dialogues) + "\n", encoding="utf-8")
+
+
+def burn_subtitles(video_path: str, srt_path: str, output_path: str) -> None:
+    """Burn SRT subtitles into video.
+
+    Converts SRT → ASS first (reliable styling/positioning), then uses the
+    FFmpeg `ass` filter. Alignment=5 centers the subtitle both horizontally
+    and vertically on screen.
+    """
+    import shutil, subprocess
+    ffmpeg = shutil.which("ffmpeg") or "ffmpeg"
+
+    ass_path = str(Path(srt_path).with_suffix(".ass"))
+    _srt_to_ass(srt_path, ass_path)
+
+    # Escape path for FFmpeg filter (Windows: C:\path → C\:/path)
+    ass_escaped = str(Path(ass_path).resolve()).replace("\\", "/").replace(":", "\\:")
+    cmd = [
+        ffmpeg, "-y",
+        "-i", video_path,
+        "-vf", f"ass='{ass_escaped}'",
+        "-c:a", "copy",
+        output_path,
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"FFmpeg subtitle burn failed:\n{result.stderr[-2000:]}")
+
+
 def run_job_upload(
     job: JobState,
     description: str,
@@ -791,12 +866,28 @@ def run_job_upload(
         yield ("stage_failed", {"stage": "upload", "error": err})
         return
 
+    # Use pre-burned final.mp4 if available (burned at confirmation time),
+    # otherwise burn now as fallback.
+    srt_stage = job.stages.get("srt", {})
+    srt_path = srt_stage.get("srt_path")
+    final_path = str(job.job_dir / "final.mp4")
+    upload_video = merge_output
+    if Path(final_path).is_file():
+        upload_video = final_path
+    elif srt_path and Path(srt_path).is_file():
+        try:
+            burn_subtitles(merge_output, srt_path, final_path)
+            upload_video = final_path
+        except Exception as exc:
+            yield ("subtitle_burn_warning", {"error": _format_exception(exc)})
+            # Fall back to uploading without subtitles
+
     accounts = job.params.get("tiktok_accounts", [])
     results: dict[str, str] = {}
 
     for account in accounts:
         try:
-            _upload_tiktok(merge_output, description[:150], account)
+            _upload_tiktok(upload_video, description[:150], account)
             results[account] = "success"
             yield ("upload_account_done", {"account": account})
         except Exception as exc:

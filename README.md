@@ -7,7 +7,7 @@ Current end-to-end flow:
 1. Generate multiple clips from prompts via Seedance API
 2. Review and confirm clips one by one
 3. Merge confirmed clips with FFmpeg
-4. Generate subtitles with Whisper and edit SRT before upload
+4. Generate subtitles with Whisper, edit SRT, preview burned result before upload
 5. Upload to one or more TikTok accounts
 
 This dashboard is a UI/orchestration layer on top of sibling repositories:
@@ -32,7 +32,7 @@ This dashboard is a UI/orchestration layer on top of sibling repositories:
 - Done: Module 4 Checkpoint Resume System
 - Done: Module 5 Execution Panel
 - Done: Module 6 Subtitle Generation and Review
-- Planned: Module 7 Upload Scheduler
+- Done: Module 7 Upload (basic immediate upload; scheduled upload not yet implemented)
 - Planned: Module 8 History Panel
 - Planned: Module 9 Account Management
 

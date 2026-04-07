@@ -46,7 +46,7 @@ from modules.bgm_manager import (
     list_bgm_files,
     save_uploaded_bgm,
 )
-from pipeline import STEPS, STYLE_MAP, list_audio_files, run_job_clips, run_job_merge, run_job_srt, run_pipeline
+from pipeline import STEPS, STYLE_MAP, burn_subtitles, list_audio_files, run_job_clips, run_job_merge, run_job_srt, run_job_upload, run_pipeline
 
 load_dotenv()
 
@@ -662,6 +662,70 @@ def _start_post_thread(job_id: str, run_srt: bool) -> None:
     st.session_state[_post_thread_key(job_id)] = t
 
 
+def _burn_thread_key(job_id: str) -> str:
+    return f"_burn_thread_{job_id}"
+
+
+def _burn_error_key(job_id: str) -> str:
+    return f"_burn_error_{job_id}"
+
+
+def _is_burn_running(job_id: str) -> bool:
+    t = st.session_state.get(_burn_thread_key(job_id))
+    return t is not None and t.is_alive()
+
+
+def _start_burn_thread(job_id: str, merge_output: str, srt_path: str) -> None:
+    """Burn subtitles into final.mp4 in background. No-op if already running."""
+    if _is_burn_running(job_id):
+        return
+    st.session_state.pop(_burn_error_key(job_id), None)
+    final_path = str(Path(merge_output).parent / "final.mp4")
+
+    def _worker() -> None:
+        try:
+            burn_subtitles(merge_output, srt_path, final_path)
+        except Exception as exc:
+            st.session_state[_burn_error_key(job_id)] = str(exc)
+
+    t = threading.Thread(target=_worker, daemon=True, name=f"burn-{job_id[:8]}")
+    t.start()
+    st.session_state[_burn_thread_key(job_id)] = t
+
+
+def _upload_thread_key(job_id: str) -> str:
+    return f"_upload_thread_{job_id}"
+
+
+def _is_upload_running(job_id: str) -> bool:
+    t = st.session_state.get(_upload_thread_key(job_id))
+    return t is not None and t.is_alive()
+
+
+def _start_upload_thread(job_id: str, description: str) -> None:
+    """Start upload thread. No-op if already running."""
+    if _is_upload_running(job_id):
+        return
+
+    def _worker() -> None:
+        try:
+            job = JobState.load(job_id)
+            for _ in run_job_upload(job, description):
+                pass
+        except Exception:
+            try:
+                j = JobState.load(job_id)
+                if j.overall_status not in (STATUS_COMPLETED, STATUS_FAILED):
+                    j.overall_status = STATUS_FAILED
+                    j.save()
+            except Exception:
+                pass
+
+    t = threading.Thread(target=_worker, daemon=True, name=f"upload-{job_id[:8]}")
+    t.start()
+    st.session_state[_upload_thread_key(job_id)] = t
+
+
 # ─── Module 6 — Merge & subtitle panel ───────────────────────────────────────
 
 def _render_merge_srt_panel(job: JobState) -> None:
@@ -714,6 +778,109 @@ def _render_merge_srt_panel(job: JobState) -> None:
         st.success(_t("✅ 合并完成", "✅ Merge complete"))
         if output_path and Path(output_path).exists():
             st.video(output_path)
+
+    # ── Upload panel (SRT confirmed or no-subtitle path) ─────────────────
+    if status == STATUS_UPLOADING:
+        upload_stage = job.stages.get("upload", {})
+        upload_busy  = _is_upload_running(job_id)
+        accounts     = job.params.get("tiktok_accounts", [])
+        upload_status = upload_stage.get("status", "pending")
+
+        st.divider()
+        st.subheader(_t("🚀 上传到 TikTok", "🚀 Upload to TikTok"))
+        st.caption(_t(f"目标账号：{', '.join(accounts)}", f"Target accounts: {', '.join(accounts)}"))
+
+        if upload_status == "running" or upload_busy:
+            st.info(_t("⏳ 正在上传…", "⏳ Uploading…"))
+            for acc, res in (upload_stage.get("results") or {}).items():
+                icon = "✅" if res == "success" else "❌"
+                st.write(f"{icon} `{acc}`: {res}")
+            time.sleep(2)
+            st.rerun()
+            return
+
+        if upload_status == "done":
+            results = upload_stage.get("results", {})
+            st.success(_t("🎉 上传完成！", "🎉 Upload complete!"))
+            for acc, res in results.items():
+                icon = "✅" if res == "success" else "❌"
+                st.write(f"{icon} `{acc}`: {res}")
+            return
+
+        if upload_status == "failed":
+            st.error(_t(
+                f"❌ 上传失败：{upload_stage.get('error', '')}",
+                f"❌ Upload failed: {upload_stage.get('error', '')}",
+            ))
+
+        # Pending (or failed retry) — show upload form
+        burn_running = _is_burn_running(job_id)
+        burn_error   = st.session_state.get(_burn_error_key(job_id))
+        final_path   = str(job.job_dir / "final.mp4")
+        final_ready  = Path(final_path).is_file()
+
+        # ── Burn progress ────────────────────────────────────────────────
+        if burn_running:
+            st.info(_t("⏳ 正在烧录字幕，请稍候…", "⏳ Burning subtitles into video…"))
+            time.sleep(1.5)
+            st.rerun()
+            return
+
+        if burn_error:
+            st.error(_t(f"❌ 字幕烧录失败：{burn_error}", f"❌ Subtitle burn failed: {burn_error}"))
+            merge_out = job.stages.get("merge", {}).get("output_path", "")
+            srt_p = srt_stage.get("srt_path", "")
+            if st.button(_t("🔄 重新烧录", "🔄 Retry burn"), key="retry_burn_btn"):
+                if merge_out and srt_p:
+                    _start_burn_thread(job_id, merge_out, srt_p)
+                    st.rerun()
+
+        # ── Final video preview ──────────────────────────────────────────
+        if final_ready:
+            st.subheader(_t("🎬 带字幕预览", "🎬 Preview with subtitles"))
+            st.video(final_path)
+            if st.button(_t("↩️ 返回编辑字幕", "↩️ Back to edit subtitles"), key="back_to_srt_btn"):
+                _j = JobState.load(job_id)
+                _j.overall_status = STATUS_SRT_REVIEW
+                _j.save()
+                st.rerun()
+        elif not burn_error:
+            # Burn thread not started yet (e.g. page refreshed) — restart it
+            merge_out = job.stages.get("merge", {}).get("output_path", "")
+            srt_p = srt_stage.get("srt_path", "")
+            if merge_out and srt_p:
+                _start_burn_thread(job_id, merge_out, srt_p)
+            st.info(_t("⏳ 正在烧录字幕，请稍候…", "⏳ Burning subtitles into video…"))
+            time.sleep(1.5)
+            st.rerun()
+            return
+
+        # ── Upload form (only shown after final.mp4 is ready) ───────────
+        if not final_ready:
+            return
+
+        _desc_key = f"upload_desc_{job_id}"
+        song   = job.song
+        artist = job.artist
+        default_desc = f"{song} - {artist}".strip(" -") if (song or artist) else ""
+        description = st.text_area(
+            _t("视频描述（TikTok caption）", "Video description (TikTok caption)"),
+            value=st.session_state.get(_desc_key, default_desc),
+            height=100,
+            key=_desc_key,
+        )
+        scheduled_at = upload_stage.get("scheduled_at") or job.params.get("scheduled_at")
+        if scheduled_at:
+            st.info(_t(f"定时发布：{scheduled_at}", f"Scheduled: {scheduled_at}"))
+        if st.button(
+            _t("🚀 立即上传", "🚀 Upload now"),
+            type="primary",
+            use_container_width=True,
+            key="start_upload_btn",
+        ):
+            _start_upload_thread(job_id, description)
+            st.rerun()
+        return
 
     # ── SRT in progress ──────────────────────────────────────────────────
     if subtitle_mode == "whisper":
@@ -806,6 +973,10 @@ def _render_merge_srt_panel(job: JobState) -> None:
                             pass
                     _j.overall_status = STATUS_UPLOADING
                     _j.save()
+                    # Start burn thread so final.mp4 is ready before upload
+                    _merge_out = _j.stages.get("merge", {}).get("output_path", "")
+                    if srt_path and _merge_out:
+                        _start_burn_thread(job_id, _merge_out, srt_path)
                     st.rerun()
             return
 
