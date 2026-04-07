@@ -606,6 +606,7 @@ def _render_job_creation_panel() -> None:
                 ratio          = st.session_state.get("job_ratio", "9:16"),
                 duration       = int(st.session_state.get("job_duration", 5)),
                 beats_per_cut  = int(st.session_state.get("bgm_beats_per_cut", 2)),
+                bpm            = (st.session_state.get(f"bgm_analysis_{st.session_state.get('job_bgm_path', '')}", {}) or {}).get("bpm"),
                 subtitle_mode     = st.session_state.get("job_subtitle_mode", "whisper"),
                 whisper_model     = st.session_state.get("job_whisper_model", "medium"),
                 whisper_language  = (lambda v: None if v == "auto" else v)(st.session_state.get("job_whisper_language", "auto")),

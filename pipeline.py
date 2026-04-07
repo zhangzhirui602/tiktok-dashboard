@@ -826,41 +826,87 @@ def _merge_clips(
     bgm_path: str | None,
     style: str | None,
 ) -> str:
-    """Concatenate clips with FFmpeg and overlay BGM. Returns output path."""
+    """Concatenate clips with FFmpeg and overlay BGM. Returns output path.
+
+    When bpm and beats_per_cut are available in job.params, each clip is
+    trimmed to the beat interval (cut_s = 60/bpm * beats_per_cut) so that
+    cuts land on the beat. The total duration is capped to the BGM length
+    via -shortest.
+
+    Without bpm info, falls back to simple concat (clips play at full length).
+    """
     import subprocess
     import shutil
 
     output_path = str(job.job_dir / "merged.mp4")
-    concat_list = job.job_dir / "concat.txt"
-
-    # Write FFmpeg concat file
-    with open(concat_list, "w", encoding="utf-8") as f:
-        for p in clip_paths:
-            # FFmpeg requires forward slashes even on Windows
-            safe = Path(p).as_posix()
-            f.write(f"file '{safe}'\n")
-
     ffmpeg = shutil.which("ffmpeg") or "ffmpeg"
 
-    if bgm_path and Path(bgm_path).is_file():
-        # Concat clips then mix BGM
-        cmd = [
-            ffmpeg, "-y",
-            "-f", "concat", "-safe", "0", "-i", str(concat_list),
-            "-i", bgm_path,
-            "-map", "0:v:0", "-map", "1:a:0",
-            "-c:v", "copy", "-c:a", "aac",
-            "-shortest",
-            output_path,
-        ]
+    bpm: float | None = job.params.get("bpm")
+    beats_per_cut: int = int(job.params.get("beats_per_cut", 2))
+    has_bgm = bgm_path and Path(bgm_path).is_file()
+
+    if bpm and bpm > 0 and beats_per_cut > 0:
+        # ── Beat-aware merge: trim each clip to the cut interval ──────────────
+        cut_s = (60.0 / bpm) * beats_per_cut
+        n = len(clip_paths)
+
+        # Build filter_complex: trim + setpts for each clip, then concat
+        filter_parts: list[str] = []
+        for i in range(n):
+            filter_parts.append(
+                f"[{i}:v]trim=duration={cut_s:.6f},setpts=PTS-STARTPTS[v{i}]"
+            )
+        concat_inputs = "".join(f"[v{i}]" for i in range(n))
+        filter_parts.append(f"{concat_inputs}concat=n={n}:v=1:a=0[vout]")
+        filter_complex = ";".join(filter_parts)
+
+        # All clip inputs
+        cmd: list[str] = [ffmpeg, "-y"]
+        for p in clip_paths:
+            cmd += ["-i", p]
+
+        if has_bgm:
+            cmd += ["-i", bgm_path]
+            cmd += [
+                "-filter_complex", filter_complex,
+                "-map", "[vout]",
+                "-map", f"{n}:a:0",
+                "-c:v", "libx264", "-c:a", "aac",
+                "-shortest",   # cap total at BGM length
+                output_path,
+            ]
+        else:
+            cmd += [
+                "-filter_complex", filter_complex,
+                "-map", "[vout]",
+                "-c:v", "libx264",
+                output_path,
+            ]
     else:
-        # Concat only, no audio replacement
-        cmd = [
-            ffmpeg, "-y",
-            "-f", "concat", "-safe", "0", "-i", str(concat_list),
-            "-c", "copy",
-            output_path,
-        ]
+        # ── Fallback: simple concat (no bpm info) ─────────────────────────────
+        concat_list = job.job_dir / "concat.txt"
+        with open(concat_list, "w", encoding="utf-8") as f:
+            for p in clip_paths:
+                safe = Path(p).as_posix()
+                f.write(f"file '{safe}'\n")
+
+        if has_bgm:
+            cmd = [
+                ffmpeg, "-y",
+                "-f", "concat", "-safe", "0", "-i", str(concat_list),
+                "-i", bgm_path,
+                "-map", "0:v:0", "-map", "1:a:0",
+                "-c:v", "copy", "-c:a", "aac",
+                "-shortest",
+                output_path,
+            ]
+        else:
+            cmd = [
+                ffmpeg, "-y",
+                "-f", "concat", "-safe", "0", "-i", str(concat_list),
+                "-c", "copy",
+                output_path,
+            ]
 
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
