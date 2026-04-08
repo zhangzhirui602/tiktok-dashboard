@@ -7,7 +7,7 @@ Current end-to-end flow:
 1. Generate multiple clips from prompts via Seedance API
 2. Review and confirm clips one by one
 3. Merge confirmed clips with FFmpeg
-4. Generate subtitles with Whisper, edit SRT, preview burned result before upload
+4. Generate subtitles with Whisper (word-by-word or sentence-by-sentence), edit SRT, preview burned result before upload
 5. Upload to one or more TikTok accounts
 
 This dashboard is a UI/orchestration layer on top of sibling repositories:
@@ -21,8 +21,18 @@ This dashboard is a UI/orchestration layer on top of sibling repositories:
 - Job-based workflow with persistent checkpoint resume (state stored in tmp/jobs)
 - Clip-level controls: retry, regenerate with edited prompt, per-clip confirmation
 - BGM Manager (assets/bgm): upload, preview, delete, BPM analysis, suggested clip count
-- Subtitle workflow: Whisper model/language options, SRT preview/edit, re-run recognition
+- Subtitle workflow: Whisper model/language options, subtitle display mode (word/sentence), SRT preview/edit, re-run recognition
 - Multi-account TikTok upload with clearer failure diagnostics
+
+## Subtitle Display Behavior
+
+- `word`: one subtitle entry per word (karaoke-like)
+- `sentence`: sentence-level grouping with these boundaries:
+	- punctuation: `,` `，` `.` `。` `?` `？` `!` `！`
+	- pause fallback when no punctuation is present
+	- hard cap: 12 words per subtitle entry
+	- comma stays at the end of the previous sentence
+- Behavior is consistent for both Whisper Python API and Whisper CLI fallback outputs
 
 ## Module Status (UI v2)
 
@@ -142,7 +152,13 @@ Check:
 - ffmpeg is available in PATH
 - selected BGM or merged video contains audible vocals
 
-The app writes word-level SRT for subtitle review and allows re-running recognition.
+Notes:
+
+- If `openai-whisper` is unavailable, the app automatically falls back to `whisper` CLI.
+- `word` mode outputs word-level SRT.
+- `sentence` mode normalizes SRT into sentence-level entries with punctuation, pause fallback, and 12-word max-length splitting.
+
+The app allows re-running recognition and manual SRT editing before confirmation.
 
 ## Security Notes
 
