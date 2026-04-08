@@ -242,6 +242,7 @@ def _render_bgm_manager() -> None:
                         if _prev:
                             st.session_state.pop(f"bgm_analysis_{_prev}", None)
                         st.session_state.pop("bgm_beats_per_cut", None)
+                        st.session_state.pop("job_bgm_path", None)
                         st.rerun()
                 else:
                     if st.button(
@@ -254,6 +255,7 @@ def _render_bgm_manager() -> None:
                         if _old:
                             st.session_state.pop(f"bgm_analysis_{_old}", None)
                         st.session_state["bgm_selected_path"] = str(p)
+                        st.session_state["job_bgm_path"] = str(p)
                         st.rerun()
 
             with col_del:
@@ -526,12 +528,15 @@ def _render_job_creation_panel() -> None:
     for _bp in list_audio_files():
         if _bp not in _all_bgm:
             _all_bgm.append(_bp)
-    _bgm_idx = _all_bgm.index(_mgr_bgm) if _mgr_bgm and _mgr_bgm in _all_bgm else 0
+    # Sync session state with BGM Manager selection (only when not yet set or stale)
+    if _mgr_bgm and st.session_state.get("job_bgm_path") != _mgr_bgm:
+        st.session_state["job_bgm_path"] = _mgr_bgm
+    elif not _mgr_bgm and "job_bgm_path" not in st.session_state:
+        st.session_state["job_bgm_path"] = None
 
     st.selectbox(
         _t("背景音乐（可选）", "BGM (optional)"),
         _all_bgm,
-        index=_bgm_idx,
         format_func=lambda p: _t("无", "None") if p is None else Path(p).name,
         key="job_bgm_path",
     )
