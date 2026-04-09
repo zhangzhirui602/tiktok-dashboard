@@ -8,19 +8,20 @@
   ⬜ 模块 3  AI Prompt 扩展
   ✅ 模块 6  字幕生成
   ⬜ 模块 7  上传调度
-  ⬜ 模块 8  历史记录
-  ⬜ 模块 9  账号管理
+  ✅ 模块 8  历史记录
+  ✅ 模块 9  账号管理
 """
 
 from __future__ import annotations
 
+import datetime
 import os
 import threading
 import time
 from pathlib import Path
 
 import streamlit as st
-from dotenv import load_dotenv
+from dotenv import load_dotenv, set_key
 
 from job_state import (
     CLIP_DONE,
@@ -1233,6 +1234,219 @@ def _render_execution_panel(job: JobState) -> None:
         ))
 
 
+# ─── History panel (Module 8) ────────────────────────────────────────────────
+
+def _render_history_panel() -> None:
+    st.title(_t("📋 历史记录", "📋 History"))
+
+    all_jobs = JobState.load_all()
+
+    if not all_jobs:
+        st.info(_t("暂无任务记录。", "No jobs found."))
+        return
+
+    # ── Status filter buttons ─────────────────────────────────────────────
+    _FILTER_OPTIONS = [
+        ("all",        _t("全部",   "All")),
+        ("generating", _t("生成中", "Generating")),
+        ("completed",  _t("已完成", "Completed")),
+        ("failed",     _t("失败",   "Failed")),
+    ]
+
+    if "history_filter" not in st.session_state:
+        st.session_state["history_filter"] = "all"
+
+    cols = st.columns(len(_FILTER_OPTIONS))
+    for col, (key, label) in zip(cols, _FILTER_OPTIONS):
+        count = sum(
+            1 for j in all_jobs
+            if key == "all"
+            or (key == "generating" and j.overall_status not in (STATUS_COMPLETED, STATUS_FAILED))
+            or j.overall_status == key
+        )
+        active = st.session_state["history_filter"] == key
+        btn_label = f"**{label}** ({count})" if active else f"{label} ({count})"
+        if col.button(btn_label, key=f"hist_filter_{key}", use_container_width=True):
+            st.session_state["history_filter"] = key
+            st.rerun()
+
+    st.divider()
+
+    # ── Filter jobs ───────────────────────────────────────────────────────
+    filt = st.session_state["history_filter"]
+    if filt == "all":
+        shown = all_jobs
+    elif filt == "generating":
+        shown = [j for j in all_jobs if j.overall_status not in (STATUS_COMPLETED, STATUS_FAILED)]
+    else:
+        shown = [j for j in all_jobs if j.overall_status == filt]
+
+    if not shown:
+        st.caption(_t("没有符合条件的记录。", "No matching records."))
+        return
+
+    # ── Job rows ──────────────────────────────────────────────────────────
+    for job in shown:
+        status_zh = _OVERALL_STATUS_ZH.get(job.overall_status, job.overall_status)
+        counts = job.clip_counts()
+        done_n = counts[CLIP_DONE]
+        total_n = len(job.clips)
+
+        upload_stage = job.stages.get("upload", {})
+        accounts = list((upload_stage.get("results") or {}).keys())
+        accounts_str = ", ".join(accounts) if accounts else "—"
+
+        scheduled_at = job.params.get("scheduled_at") or "—"
+
+        header = (
+            f"**{job.song or '—'}**"
+            f"  ·  {job.artist or '—'}"
+            f"  ·  {status_zh}"
+            f"  ·  {done_n}/{total_n} 片段"
+            f"  ·  {job.created_at[:16]}"
+        )
+
+        with st.expander(header, expanded=False):
+            c1, c2, c3, c4 = st.columns(4)
+            c1.markdown(f"**{_t('创建时间','Created')}**\n\n{job.created_at[:16]}")
+            c2.markdown(f"**{_t('上传账号','Account')}**\n\n{accounts_str}")
+            c3.markdown(f"**{_t('发布时间','Scheduled')}**\n\n{scheduled_at}")
+            c4.markdown(f"**TikTok 链接**\n\n—")
+
+            st.markdown(f"**{_t('片段状态','Clip Status')}**")
+            clip_cols = st.columns(min(total_n, 8))
+            for i, clip in enumerate(job.clips):
+                icon = CLIP_ICONS.get(clip["status"], "❓")
+                clip_cols[i % 8].caption(f"{icon} #{i}")
+
+            final_path = (job.stages.get("upload") or {}).get("output_path") or \
+                         (job.stages.get("merge") or {}).get("output_path")
+            if final_path and Path(final_path).exists():
+                st.markdown(f"**{_t('最终视频','Final Video')}**  `{final_path}`")
+
+            st.divider()
+            btn_col1, btn_col2 = st.columns([1, 4])
+            if job.overall_status not in (STATUS_COMPLETED, STATUS_FAILED):
+                if btn_col1.button(
+                    _t("▶ 继续执行", "▶ Resume"),
+                    key=f"hist_resume_{job.job_id}",
+                ):
+                    st.session_state["active_job_id"] = job.job_id
+                    st.session_state["page"] = "execution"
+                    st.rerun()
+            else:
+                btn_col1.caption(_t(f"状态：{status_zh}", f"Status: {status_zh}"))
+
+
+# ─── Account management panel (Module 9) ─────────────────────────────────────
+
+_ENV_FILE = Path(__file__).parent / ".env"
+
+
+def _cookie_validity(path_str: str) -> tuple[str, str]:
+    """Return (badge_emoji + label, streamlit color) for a cookies path."""
+    p = Path(path_str)
+    if not p.exists():
+        return "🔴 文件缺失", "error"
+    age_days = (datetime.datetime.now() - datetime.datetime.fromtimestamp(p.stat().st_mtime)).days
+    if age_days <= 30:
+        return f"🟢 有效（{age_days}天前更新）", "success"
+    elif age_days <= 60:
+        return f"🟡 可能即将过期（{age_days}天前更新）", "warning"
+    else:
+        return f"🔴 可能已失效（{age_days}天前更新）", "error"
+
+
+def _last_upload_time(account_name: str, all_jobs: list) -> str:
+    """Return the most recent upload time for an account from job history."""
+    latest = None
+    for job in all_jobs:
+        results = (job.stages.get("upload") or {}).get("results") or {}
+        if account_name in results and results[account_name] == "success":
+            scheduled = job.params.get("scheduled_at") or job.updated_at
+            if scheduled and (latest is None or scheduled > latest):
+                latest = scheduled
+    return latest[:16] if latest else "—"
+
+
+def _render_accounts_panel() -> None:
+    st.title(_t("👤 账号管理", "👤 Account Management"))
+
+    # Read all TIKTOK_COOKIES_* from env
+    raw_accounts = {
+        k[len("TIKTOK_COOKIES_"):].lower(): v
+        for k, v in os.environ.items()
+        if k.startswith("TIKTOK_COOKIES_") and k != "TIKTOK_COOKIES_"
+    }
+
+    all_jobs = JobState.load_all()
+
+    # ── Existing accounts ─────────────────────────────────────────────────
+    if raw_accounts:
+        st.subheader(_t("现有账号", "Existing Accounts"))
+        for acct_name, cookies_path in raw_accounts.items():
+            validity_label, validity_level = _cookie_validity(cookies_path)
+            last_upload = _last_upload_time(acct_name, all_jobs)
+
+            with st.expander(f"**{acct_name}**  ·  {validity_label}", expanded=False):
+                c1, c2 = st.columns(2)
+                c1.markdown(f"**{_t('最近上传', 'Last Upload')}**\n\n{last_upload}")
+
+                if validity_level == "error":
+                    c2.error(validity_label)
+                elif validity_level == "warning":
+                    c2.warning(validity_label)
+                else:
+                    c2.success(validity_label)
+
+                new_path = st.text_input(
+                    _t("Cookies 文件路径", "Cookies file path"),
+                    value=cookies_path,
+                    key=f"acct_path_{acct_name}",
+                )
+                if st.button(_t("💾 保存路径", "💾 Save path"), key=f"acct_save_{acct_name}"):
+                    env_key = f"TIKTOK_COOKIES_{acct_name.upper()}"
+                    set_key(str(_ENV_FILE), env_key, new_path)
+                    st.success(_t(
+                        "已保存，请重启 Streamlit 使新配置生效。",
+                        "Saved. Please restart Streamlit for the change to take effect.",
+                    ))
+    else:
+        st.info(_t("尚未配置任何 TikTok 账号。", "No TikTok accounts configured yet."))
+
+    st.divider()
+
+    # ── Add new account ───────────────────────────────────────────────────
+    st.subheader(_t("添加新账号", "Add New Account"))
+    with st.form("add_account_form"):
+        new_name = st.text_input(
+            _t("账号名（英文，不含空格）", "Account name (letters/numbers, no spaces)"),
+            placeholder="e.g. myaccount",
+        )
+        new_cookies = st.text_input(
+            _t("Cookies 文件路径", "Cookies file path"),
+            placeholder="cookies/myaccount.txt",
+        )
+        submitted = st.form_submit_button(_t("➕ 添加账号", "➕ Add Account"))
+
+    if submitted:
+        name_clean = new_name.strip().replace(" ", "_").upper()
+        path_clean = new_cookies.strip()
+        if not name_clean:
+            st.error(_t("账号名不能为空。", "Account name cannot be empty."))
+        elif not path_clean:
+            st.error(_t("Cookies 路径不能为空。", "Cookies path cannot be empty."))
+        elif name_clean in [a.upper() for a in raw_accounts]:
+            st.error(_t("该账号名已存在。", "Account name already exists."))
+        else:
+            env_key = f"TIKTOK_COOKIES_{name_clean}"
+            set_key(str(_ENV_FILE), env_key, path_clean)
+            st.success(_t(
+                f"账号 {name_clean.lower()} 已添加，请重启 Streamlit 使配置生效。",
+                f"Account {name_clean.lower()} added. Please restart Streamlit to apply.",
+            ))
+
+
 # ─── Legacy single-clip form (backward compat) ───────────────────────────────
 
 def _render_legacy_form() -> None:
@@ -1355,6 +1569,12 @@ with st.sidebar:
     if st.button(_t("🏠 主页", "🏠 Home"), use_container_width=True, key="sb_home"):
         st.session_state["page"] = "home"
         st.rerun()
+    if st.button(_t("📋 历史记录", "📋 History"), use_container_width=True, key="sb_history"):
+        st.session_state["page"] = "history"
+        st.rerun()
+    if st.button(_t("👤 账号管理", "👤 Accounts"), use_container_width=True, key="sb_accounts"):
+        st.session_state["page"] = "accounts"
+        st.rerun()
 
 # ─── Session state defaults ───────────────────────────────────────────────────
 
@@ -1426,3 +1646,17 @@ elif _page == "execution":
     if _is_running(_job_id) or _is_post_running(_job_id):
         time.sleep(1.5)
         st.rerun()
+
+# ══════════════════════════════════════════════════════════════════════════════
+# HISTORY
+# ══════════════════════════════════════════════════════════════════════════════
+
+elif _page == "history":
+    _render_history_panel()
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ACCOUNTS
+# ══════════════════════════════════════════════════════════════════════════════
+
+elif _page == "accounts":
+    _render_accounts_panel()
