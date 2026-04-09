@@ -8,7 +8,7 @@
   ⬜ 模块 3  AI Prompt 扩展
   ✅ 模块 6  字幕生成
   ⬜ 模块 7  上传调度
-  ⬜ 模块 8  历史记录
+  ✅ 模块 8  历史记录
   ⬜ 模块 9  账号管理
 """
 
@@ -1242,6 +1242,110 @@ def _render_execution_panel(job: JobState) -> None:
         ))
 
 
+# ─── History panel (Module 8) ────────────────────────────────────────────────
+
+def _render_history_panel() -> None:
+    st.title(_t("📋 历史记录", "📋 History"))
+
+    all_jobs = JobState.load_all()
+
+    if not all_jobs:
+        st.info(_t("暂无任务记录。", "No jobs found."))
+        return
+
+    # ── Status filter buttons ─────────────────────────────────────────────
+    _FILTER_OPTIONS = [
+        ("all",        _t("全部",   "All")),
+        ("generating", _t("生成中", "Generating")),
+        ("completed",  _t("已完成", "Completed")),
+        ("failed",     _t("失败",   "Failed")),
+    ]
+
+    if "history_filter" not in st.session_state:
+        st.session_state["history_filter"] = "all"
+
+    cols = st.columns(len(_FILTER_OPTIONS))
+    for col, (key, label) in zip(cols, _FILTER_OPTIONS):
+        count = sum(
+            1 for j in all_jobs
+            if key == "all"
+            or (key == "generating" and j.overall_status not in (STATUS_COMPLETED, STATUS_FAILED))
+            or j.overall_status == key
+        )
+        active = st.session_state["history_filter"] == key
+        btn_label = f"**{label}** ({count})" if active else f"{label} ({count})"
+        if col.button(btn_label, key=f"hist_filter_{key}", use_container_width=True):
+            st.session_state["history_filter"] = key
+            st.rerun()
+
+    st.divider()
+
+    # ── Filter jobs ───────────────────────────────────────────────────────
+    filt = st.session_state["history_filter"]
+    if filt == "all":
+        shown = all_jobs
+    elif filt == "generating":
+        shown = [j for j in all_jobs if j.overall_status not in (STATUS_COMPLETED, STATUS_FAILED)]
+    else:
+        shown = [j for j in all_jobs if j.overall_status == filt]
+
+    if not shown:
+        st.caption(_t("没有符合条件的记录。", "No matching records."))
+        return
+
+    # ── Job rows ──────────────────────────────────────────────────────────
+    for job in shown:
+        status_zh = _OVERALL_STATUS_ZH.get(job.overall_status, job.overall_status)
+        counts = job.clip_counts()
+        done_n = counts[CLIP_DONE]
+        total_n = len(job.clips)
+
+        upload_stage = job.stages.get("upload", {})
+        accounts = list((upload_stage.get("results") or {}).keys())
+        accounts_str = ", ".join(accounts) if accounts else "—"
+
+        scheduled_at = job.params.get("scheduled_at") or "—"
+
+        header = (
+            f"**{job.song or '—'}**"
+            f"  ·  {job.artist or '—'}"
+            f"  ·  {status_zh}"
+            f"  ·  {done_n}/{total_n} 片段"
+            f"  ·  {job.created_at[:16]}"
+        )
+
+        with st.expander(header, expanded=False):
+            c1, c2, c3, c4 = st.columns(4)
+            c1.markdown(f"**{_t('创建时间','Created')}**\n\n{job.created_at[:16]}")
+            c2.markdown(f"**{_t('上传账号','Account')}**\n\n{accounts_str}")
+            c3.markdown(f"**{_t('发布时间','Scheduled')}**\n\n{scheduled_at}")
+            c4.markdown(f"**TikTok 链接**\n\n—")
+
+            st.markdown(f"**{_t('片段状态','Clip Status')}**")
+            clip_cols = st.columns(min(total_n, 8))
+            for i, clip in enumerate(job.clips):
+                icon = CLIP_ICONS.get(clip["status"], "❓")
+                clip_cols[i % 8].caption(f"{icon} #{i}")
+
+            final_path = (job.stages.get("upload") or {}).get("output_path") or \
+                         (job.stages.get("merge") or {}).get("output_path")
+            if final_path and Path(final_path).exists():
+                st.markdown(f"**{_t('最终视频','Final Video')}**  `{final_path}`")
+
+            st.divider()
+            btn_col1, btn_col2 = st.columns([1, 4])
+            if job.overall_status not in (STATUS_COMPLETED, STATUS_FAILED):
+                if btn_col1.button(
+                    _t("▶ 继续执行", "▶ Resume"),
+                    key=f"hist_resume_{job.job_id}",
+                ):
+                    st.session_state["active_job_id"] = job.job_id
+                    st.session_state["page"] = "execution"
+                    st.rerun()
+            else:
+                btn_col1.caption(_t(f"状态：{status_zh}", f"Status: {status_zh}"))
+
+
 # ─── Legacy single-clip form (backward compat) ───────────────────────────────
 
 def _render_legacy_form() -> None:
@@ -1364,6 +1468,9 @@ with st.sidebar:
     if st.button(_t("🏠 主页", "🏠 Home"), use_container_width=True, key="sb_home"):
         st.session_state["page"] = "home"
         st.rerun()
+    if st.button(_t("📋 历史记录", "📋 History"), use_container_width=True, key="sb_history"):
+        st.session_state["page"] = "history"
+        st.rerun()
 
 # ─── Session state defaults ───────────────────────────────────────────────────
 
@@ -1435,3 +1542,10 @@ elif _page == "execution":
     if _is_running(_job_id) or _is_post_running(_job_id):
         time.sleep(1.5)
         st.rerun()
+
+# ══════════════════════════════════════════════════════════════════════════════
+# HISTORY
+# ══════════════════════════════════════════════════════════════════════════════
+
+elif _page == "history":
+    _render_history_panel()

@@ -43,7 +43,7 @@ This dashboard is a UI/orchestration layer on top of sibling repositories:
 - Done: Module 5 Execution Panel
 - Done: Module 6 Subtitle Generation and Review
 - Done: Module 7 Upload (basic immediate upload; scheduled upload not yet implemented)
-- Planned: Module 8 History Panel
+- Done: Module 8 History Panel
 - Planned: Module 9 Account Management
 
 ## Requirements
