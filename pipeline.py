@@ -22,6 +22,7 @@ from __future__ import annotations
 import importlib.util
 import os
 import sys
+import datetime
 import time
 import urllib.request
 import asyncio
@@ -438,7 +439,10 @@ def _run_edit_pipeline(
 # ─── TikTok uploader ──────────────────────────────────────────────────────────
 
 def _upload_tiktok(
-    video_path: str, description: str, tiktok_account: str
+    video_path: str,
+    description: str,
+    tiktok_account: str,
+    schedule: datetime.datetime | None = None,
 ) -> None:
     _ensure_windows_proactor_policy()
 
@@ -479,6 +483,7 @@ def _upload_tiktok(
             filename=video_path,
             description=description,
             cookies=str(cookies_file),
+            schedule=schedule,
         )
     except Exception as exc:
         raise RuntimeError(
@@ -882,12 +887,21 @@ def run_job_upload(
             yield ("subtitle_burn_warning", {"error": _format_exception(exc)})
             # Fall back to uploading without subtitles
 
+    # Parse scheduled_at ISO string → datetime (naive, local time)
+    schedule_dt: datetime.datetime | None = None
+    scheduled_at_str = job.params.get("scheduled_at")
+    if scheduled_at_str:
+        try:
+            schedule_dt = datetime.datetime.fromisoformat(scheduled_at_str)
+        except ValueError:
+            pass
+
     accounts = job.params.get("tiktok_accounts", [])
     results: dict[str, str] = {}
 
     for account in accounts:
         try:
-            _upload_tiktok(upload_video, description[:150], account)
+            _upload_tiktok(upload_video, description[:150], account, schedule=schedule_dt)
             results[account] = "success"
             yield ("upload_account_done", {"account": account})
         except Exception as exc:

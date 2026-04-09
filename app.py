@@ -1311,7 +1311,11 @@ def _render_history_panel() -> None:
             c1.markdown(f"**{_t('创建时间','Created')}**\n\n{job.created_at[:16]}")
             c2.markdown(f"**{_t('上传账号','Account')}**\n\n{accounts_str}")
             c3.markdown(f"**{_t('发布时间','Scheduled')}**\n\n{scheduled_at}")
-            c4.markdown(f"**TikTok 链接**\n\n—")
+            _tiktok_url = upload_stage.get("tiktok_url", "")
+            if _tiktok_url:
+                c4.markdown(f"**TikTok 链接**\n\n[查看]({_tiktok_url})")
+            else:
+                c4.markdown(f"**TikTok 链接**\n\n—")
 
             st.markdown(f"**{_t('片段状态','Clip Status')}**")
             clip_cols = st.columns(min(total_n, 8))
@@ -1323,6 +1327,21 @@ def _render_history_panel() -> None:
                          (job.stages.get("merge") or {}).get("output_path")
             if final_path and Path(final_path).exists():
                 st.markdown(f"**{_t('最终视频','Final Video')}**  `{final_path}`")
+
+            # ── TikTok URL entry (completed jobs) ────────────────────────
+            if job.overall_status == STATUS_COMPLETED:
+                _url_key = f"hist_url_input_{job.job_id}"
+                _new_url = st.text_input(
+                    _t("填写 TikTok 帖子链接", "Enter TikTok post URL"),
+                    value=upload_stage.get("tiktok_url", ""),
+                    placeholder="https://www.tiktok.com/@user/video/...",
+                    key=_url_key,
+                )
+                if st.button(_t("💾 保存链接", "💾 Save URL"), key=f"hist_url_save_{job.job_id}"):
+                    _j = JobState.load(job.job_id)
+                    _j.stages.setdefault("upload", {})["tiktok_url"] = _new_url.strip()
+                    _j.save()
+                    st.rerun()
 
             st.divider()
             btn_col1, btn_col2 = st.columns([1, 4])
