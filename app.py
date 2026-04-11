@@ -783,7 +783,9 @@ def _render_merge_srt_panel(job: JobState) -> None:
         output_path = merge_stage.get("output_path", "")
         st.success(_t("✅ 合并完成", "✅ Merge complete"))
         if output_path and Path(output_path).exists():
-            st.video(output_path)
+            _, _vc, _ = st.columns([1, 1, 1])
+            with _vc:
+                st.video(output_path)
 
     # ── Upload panel (SRT confirmed or no-subtitle path) ─────────────────
     if status == STATUS_UPLOADING:
@@ -844,7 +846,9 @@ def _render_merge_srt_panel(job: JobState) -> None:
         # ── Final video preview ──────────────────────────────────────────
         if final_ready:
             st.subheader(_t("🎬 带字幕预览", "🎬 Preview with subtitles"))
-            st.video(final_path)
+            _, _vc, _ = st.columns([1, 1, 1])
+            with _vc:
+                st.video(final_path)
             if st.button(_t("↩️ 返回编辑字幕", "↩️ Back to edit subtitles"), key="back_to_srt_btn"):
                 _j = JobState.load(job_id)
                 _j.overall_status = STATUS_SRT_REVIEW
@@ -1017,11 +1021,22 @@ def _render_clip_row(clip: dict, job_id: str) -> None:
     confirmed = clip.get("confirmed", False)
     running   = _is_running(job_id)
 
-    with st.container(border=True):
-        top_left, top_right = st.columns([5, 3])
+    _edit_key = f"_show_edit_{idx}_{job_id}"
 
-        # ── Status + prompt ───────────────────────────────────────────────
-        with top_left:
+    with st.container(border=True):
+        vid_col, info_col = st.columns([1, 2])
+
+        # ── Video preview (left ~33%, maintains 9:16 aspect ratio) ───────
+        with vid_col:
+            if status == CLIP_DONE and clip.get("local_path"):
+                vp = Path(clip["local_path"])
+                if vp.exists():
+                    st.video(str(vp))
+                else:
+                    st.caption(_t(f"⚠️ 本地文件不存在：{vp.name}", f"⚠️ File missing: {vp.name}"))
+
+        # ── Status + prompt + buttons (right ~67%) ────────────────────────
+        with info_col:
             header = f"{icon} **{_t('片段', 'Clip')} #{idx + 1}**"
             if confirmed:
                 header += "  ✓"
@@ -1043,10 +1058,7 @@ def _render_clip_row(clip: dict, job_id: str) -> None:
                     label += "  ·  ✓ " + _t("已确认", "Confirmed")
                 st.success(label)
 
-        # ── Action buttons ────────────────────────────────────────────────
-        with top_right:
             if status == CLIP_DONE:
-                # Confirm button (only when not yet confirmed)
                 if not confirmed:
                     if st.button(
                         _t("✅ 确认此片段", "✅ Confirm"),
@@ -1070,8 +1082,6 @@ def _render_clip_row(clip: dict, job_id: str) -> None:
                         _start_thread(job_id)
                         st.rerun()
 
-                    # Toggle inline prompt-edit form
-                    _edit_key = f"_show_edit_{idx}_{job_id}"
                     edit_label = (
                         _t("✏️ 收起", "✏️ Collapse")
                         if st.session_state.get(_edit_key)
@@ -1080,6 +1090,29 @@ def _render_clip_row(clip: dict, job_id: str) -> None:
                     if st.button(edit_label, key=f"edit_toggle_{idx}_{job_id}", use_container_width=True):
                         st.session_state[_edit_key] = not st.session_state.get(_edit_key, False)
                         st.rerun()
+
+                    # ── Inline prompt-edit form (inside right column) ─────
+                    if st.session_state.get(_edit_key, False):
+                        new_p = st.text_area(
+                            _t("修改后的 Prompt", "Updated Prompt"),
+                            value=clip["prompt"],
+                            key=f"new_prompt_{idx}_{job_id}",
+                            height=80,
+                        )
+                        if st.button(
+                            _t("🚀 用新 Prompt 重新生成", "🚀 Regen with new prompt"),
+                            key=f"do_regen_{idx}_{job_id}",
+                            type="primary",
+                            use_container_width=True,
+                        ):
+                            if new_p.strip():
+                                _j = JobState.load(job_id)
+                                _j.reset_clip(idx, new_prompt=new_p.strip())
+                                st.session_state[_edit_key] = False
+                                _start_thread(job_id)
+                                st.rerun()
+                            else:
+                                st.warning(_t("Prompt 不能为空。", "Prompt cannot be empty."))
 
             elif status in (CLIP_FAILED, CLIP_PENDING):
                 if not running:
@@ -1092,37 +1125,6 @@ def _render_clip_row(clip: dict, job_id: str) -> None:
                         _j.reset_clip(idx)
                         _start_thread(job_id)
                         st.rerun()
-
-        # ── Inline prompt-edit form (shown below when toggled) ────────────
-        _edit_key = f"_show_edit_{idx}_{job_id}"
-        if status == CLIP_DONE and not running and st.session_state.get(_edit_key, False):
-            new_p = st.text_area(
-                _t("修改后的 Prompt", "Updated Prompt"),
-                value=clip["prompt"],
-                key=f"new_prompt_{idx}_{job_id}",
-                height=80,
-            )
-            if st.button(
-                _t("🚀 用新 Prompt 重新生成", "🚀 Regen with new prompt"),
-                key=f"do_regen_{idx}_{job_id}",
-                type="primary",
-            ):
-                if new_p.strip():
-                    _j = JobState.load(job_id)
-                    _j.reset_clip(idx, new_prompt=new_p.strip())
-                    st.session_state[_edit_key] = False
-                    _start_thread(job_id)
-                    st.rerun()
-                else:
-                    st.warning(_t("Prompt 不能为空。", "Prompt cannot be empty."))
-
-        # ── Video preview ─────────────────────────────────────────────────
-        if status == CLIP_DONE and clip.get("local_path"):
-            vp = Path(clip["local_path"])
-            if vp.exists():
-                st.video(str(vp))
-            else:
-                st.caption(_t(f"⚠️ 本地文件不存在：{vp.name}", f"⚠️ File missing: {vp.name}"))
 
 
 # ─── Execution panel ──────────────────────────────────────────────────────────
