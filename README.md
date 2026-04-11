@@ -23,6 +23,8 @@ This dashboard is a UI/orchestration layer on top of sibling repositories:
 - BGM Manager (assets/bgm): upload, preview, delete, BPM analysis, suggested clip count
 - Subtitle workflow: Whisper model/language options, subtitle display mode (word/sentence), SRT preview/edit, re-run recognition
 - Multi-account TikTok upload with clearer failure diagnostics
+- Scheduled TikTok posting: pass a publish datetime to tiktok-uploader so TikTok handles the scheduling natively
+- TikTok post URL tracking: manually record a post link from the History panel after upload
 
 ## Subtitle Display Behavior
 
@@ -42,9 +44,9 @@ This dashboard is a UI/orchestration layer on top of sibling repositories:
 - Done: Module 4 Checkpoint Resume System
 - Done: Module 5 Execution Panel
 - Done: Module 6 Subtitle Generation and Review
-- Done: Module 7 Upload (basic immediate upload; scheduled upload not yet implemented)
+- Done: Module 7 Upload Scheduler (immediate + TikTok-native scheduled posting, post URL entry)
 - Done: Module 8 History Panel
-- Planned: Module 9 Account Management
+- Done: Module 9 Account Management
 
 ## Requirements
 

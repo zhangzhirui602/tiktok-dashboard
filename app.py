@@ -9,18 +9,19 @@
   ✅ 模块 6  字幕生成
   ⬜ 模块 7  上传调度
   ✅ 模块 8  历史记录
-  ⬜ 模块 9  账号管理
+  ✅ 模块 9  账号管理
 """
 
 from __future__ import annotations
 
+import datetime
 import os
 import threading
 import time
 from pathlib import Path
 
 import streamlit as st
-from dotenv import load_dotenv
+from dotenv import load_dotenv, set_key
 
 from job_state import (
     CLIP_DONE,
@@ -791,7 +792,9 @@ def _render_merge_srt_panel(job: JobState) -> None:
         output_path = merge_stage.get("output_path", "")
         st.success(_t("✅ 合并完成", "✅ Merge complete"))
         if output_path and Path(output_path).exists():
-            st.video(output_path)
+            _, _vc, _ = st.columns([1, 1, 1])
+            with _vc:
+                st.video(output_path)
 
     # ── Upload panel (SRT confirmed or no-subtitle path) ─────────────────
     if status == STATUS_UPLOADING:
@@ -852,7 +855,9 @@ def _render_merge_srt_panel(job: JobState) -> None:
         # ── Final video preview ──────────────────────────────────────────
         if final_ready:
             st.subheader(_t("🎬 带字幕预览", "🎬 Preview with subtitles"))
-            st.video(final_path)
+            _, _vc, _ = st.columns([1, 1, 1])
+            with _vc:
+                st.video(final_path)
             if st.button(_t("↩️ 返回编辑字幕", "↩️ Back to edit subtitles"), key="back_to_srt_btn"):
                 _j = JobState.load(job_id)
                 _j.overall_status = STATUS_SRT_REVIEW
@@ -1025,11 +1030,22 @@ def _render_clip_row(clip: dict, job_id: str) -> None:
     confirmed = clip.get("confirmed", False)
     running   = _is_running(job_id)
 
-    with st.container(border=True):
-        top_left, top_right = st.columns([5, 3])
+    _edit_key = f"_show_edit_{idx}_{job_id}"
 
-        # ── Status + prompt ───────────────────────────────────────────────
-        with top_left:
+    with st.container(border=True):
+        vid_col, info_col = st.columns([1, 2])
+
+        # ── Video preview (left ~33%, maintains 9:16 aspect ratio) ───────
+        with vid_col:
+            if status == CLIP_DONE and clip.get("local_path"):
+                vp = Path(clip["local_path"])
+                if vp.exists():
+                    st.video(str(vp))
+                else:
+                    st.caption(_t(f"⚠️ 本地文件不存在：{vp.name}", f"⚠️ File missing: {vp.name}"))
+
+        # ── Status + prompt + buttons (right ~67%) ────────────────────────
+        with info_col:
             header = f"{icon} **{_t('片段', 'Clip')} #{idx + 1}**"
             if confirmed:
                 header += "  ✓"
@@ -1051,10 +1067,7 @@ def _render_clip_row(clip: dict, job_id: str) -> None:
                     label += "  ·  ✓ " + _t("已确认", "Confirmed")
                 st.success(label)
 
-        # ── Action buttons ────────────────────────────────────────────────
-        with top_right:
             if status == CLIP_DONE:
-                # Confirm button (only when not yet confirmed)
                 if not confirmed:
                     if st.button(
                         _t("✅ 确认此片段", "✅ Confirm"),
@@ -1078,8 +1091,6 @@ def _render_clip_row(clip: dict, job_id: str) -> None:
                         _start_thread(job_id)
                         st.rerun()
 
-                    # Toggle inline prompt-edit form
-                    _edit_key = f"_show_edit_{idx}_{job_id}"
                     edit_label = (
                         _t("✏️ 收起", "✏️ Collapse")
                         if st.session_state.get(_edit_key)
@@ -1088,6 +1099,29 @@ def _render_clip_row(clip: dict, job_id: str) -> None:
                     if st.button(edit_label, key=f"edit_toggle_{idx}_{job_id}", use_container_width=True):
                         st.session_state[_edit_key] = not st.session_state.get(_edit_key, False)
                         st.rerun()
+
+                    # ── Inline prompt-edit form (inside right column) ─────
+                    if st.session_state.get(_edit_key, False):
+                        new_p = st.text_area(
+                            _t("修改后的 Prompt", "Updated Prompt"),
+                            value=clip["prompt"],
+                            key=f"new_prompt_{idx}_{job_id}",
+                            height=80,
+                        )
+                        if st.button(
+                            _t("🚀 用新 Prompt 重新生成", "🚀 Regen with new prompt"),
+                            key=f"do_regen_{idx}_{job_id}",
+                            type="primary",
+                            use_container_width=True,
+                        ):
+                            if new_p.strip():
+                                _j = JobState.load(job_id)
+                                _j.reset_clip(idx, new_prompt=new_p.strip())
+                                st.session_state[_edit_key] = False
+                                _start_thread(job_id)
+                                st.rerun()
+                            else:
+                                st.warning(_t("Prompt 不能为空。", "Prompt cannot be empty."))
 
             elif status in (CLIP_FAILED, CLIP_PENDING):
                 if not running:
@@ -1100,37 +1134,6 @@ def _render_clip_row(clip: dict, job_id: str) -> None:
                         _j.reset_clip(idx)
                         _start_thread(job_id)
                         st.rerun()
-
-        # ── Inline prompt-edit form (shown below when toggled) ────────────
-        _edit_key = f"_show_edit_{idx}_{job_id}"
-        if status == CLIP_DONE and not running and st.session_state.get(_edit_key, False):
-            new_p = st.text_area(
-                _t("修改后的 Prompt", "Updated Prompt"),
-                value=clip["prompt"],
-                key=f"new_prompt_{idx}_{job_id}",
-                height=80,
-            )
-            if st.button(
-                _t("🚀 用新 Prompt 重新生成", "🚀 Regen with new prompt"),
-                key=f"do_regen_{idx}_{job_id}",
-                type="primary",
-            ):
-                if new_p.strip():
-                    _j = JobState.load(job_id)
-                    _j.reset_clip(idx, new_prompt=new_p.strip())
-                    st.session_state[_edit_key] = False
-                    _start_thread(job_id)
-                    st.rerun()
-                else:
-                    st.warning(_t("Prompt 不能为空。", "Prompt cannot be empty."))
-
-        # ── Video preview ─────────────────────────────────────────────────
-        if status == CLIP_DONE and clip.get("local_path"):
-            vp = Path(clip["local_path"])
-            if vp.exists():
-                st.video(str(vp))
-            else:
-                st.caption(_t(f"⚠️ 本地文件不存在：{vp.name}", f"⚠️ File missing: {vp.name}"))
 
 
 # ─── Execution panel ──────────────────────────────────────────────────────────
@@ -1319,7 +1322,11 @@ def _render_history_panel() -> None:
             c1.markdown(f"**{_t('创建时间','Created')}**\n\n{job.created_at[:16]}")
             c2.markdown(f"**{_t('上传账号','Account')}**\n\n{accounts_str}")
             c3.markdown(f"**{_t('发布时间','Scheduled')}**\n\n{scheduled_at}")
-            c4.markdown(f"**TikTok 链接**\n\n—")
+            _tiktok_url = upload_stage.get("tiktok_url", "")
+            if _tiktok_url:
+                c4.markdown(f"**TikTok 链接**\n\n[查看]({_tiktok_url})")
+            else:
+                c4.markdown(f"**TikTok 链接**\n\n—")
 
             st.markdown(f"**{_t('片段状态','Clip Status')}**")
             clip_cols = st.columns(min(total_n, 8))
@@ -1331,6 +1338,21 @@ def _render_history_panel() -> None:
                          (job.stages.get("merge") or {}).get("output_path")
             if final_path and Path(final_path).exists():
                 st.markdown(f"**{_t('最终视频','Final Video')}**  `{final_path}`")
+
+            # ── TikTok URL entry (completed jobs) ────────────────────────
+            if job.overall_status == STATUS_COMPLETED:
+                _url_key = f"hist_url_input_{job.job_id}"
+                _new_url = st.text_input(
+                    _t("填写 TikTok 帖子链接", "Enter TikTok post URL"),
+                    value=upload_stage.get("tiktok_url", ""),
+                    placeholder="https://www.tiktok.com/@user/video/...",
+                    key=_url_key,
+                )
+                if st.button(_t("💾 保存链接", "💾 Save URL"), key=f"hist_url_save_{job.job_id}"):
+                    _j = JobState.load(job.job_id)
+                    _j.stages.setdefault("upload", {})["tiktok_url"] = _new_url.strip()
+                    _j.save()
+                    st.rerun()
 
             st.divider()
             btn_col1, btn_col2 = st.columns([1, 4])
@@ -1344,6 +1366,115 @@ def _render_history_panel() -> None:
                     st.rerun()
             else:
                 btn_col1.caption(_t(f"状态：{status_zh}", f"Status: {status_zh}"))
+
+
+# ─── Account management panel (Module 9) ─────────────────────────────────────
+
+_ENV_FILE = Path(__file__).parent / ".env"
+
+
+def _cookie_validity(path_str: str) -> tuple[str, str]:
+    """Return (badge_emoji + label, streamlit color) for a cookies path."""
+    p = Path(path_str)
+    if not p.exists():
+        return "🔴 文件缺失", "error"
+    age_days = (datetime.datetime.now() - datetime.datetime.fromtimestamp(p.stat().st_mtime)).days
+    if age_days <= 30:
+        return f"🟢 有效（{age_days}天前更新）", "success"
+    elif age_days <= 60:
+        return f"🟡 可能即将过期（{age_days}天前更新）", "warning"
+    else:
+        return f"🔴 可能已失效（{age_days}天前更新）", "error"
+
+
+def _last_upload_time(account_name: str, all_jobs: list) -> str:
+    """Return the most recent upload time for an account from job history."""
+    latest = None
+    for job in all_jobs:
+        results = (job.stages.get("upload") or {}).get("results") or {}
+        if account_name in results and results[account_name] == "success":
+            scheduled = job.params.get("scheduled_at") or job.updated_at
+            if scheduled and (latest is None or scheduled > latest):
+                latest = scheduled
+    return latest[:16] if latest else "—"
+
+
+def _render_accounts_panel() -> None:
+    st.title(_t("👤 账号管理", "👤 Account Management"))
+
+    # Read all TIKTOK_COOKIES_* from env
+    raw_accounts = {
+        k[len("TIKTOK_COOKIES_"):].lower(): v
+        for k, v in os.environ.items()
+        if k.startswith("TIKTOK_COOKIES_") and k != "TIKTOK_COOKIES_"
+    }
+
+    all_jobs = JobState.load_all()
+
+    # ── Existing accounts ─────────────────────────────────────────────────
+    if raw_accounts:
+        st.subheader(_t("现有账号", "Existing Accounts"))
+        for acct_name, cookies_path in raw_accounts.items():
+            validity_label, validity_level = _cookie_validity(cookies_path)
+            last_upload = _last_upload_time(acct_name, all_jobs)
+
+            with st.expander(f"**{acct_name}**  ·  {validity_label}", expanded=False):
+                c1, c2 = st.columns(2)
+                c1.markdown(f"**{_t('最近上传', 'Last Upload')}**\n\n{last_upload}")
+
+                if validity_level == "error":
+                    c2.error(validity_label)
+                elif validity_level == "warning":
+                    c2.warning(validity_label)
+                else:
+                    c2.success(validity_label)
+
+                new_path = st.text_input(
+                    _t("Cookies 文件路径", "Cookies file path"),
+                    value=cookies_path,
+                    key=f"acct_path_{acct_name}",
+                )
+                if st.button(_t("💾 保存路径", "💾 Save path"), key=f"acct_save_{acct_name}"):
+                    env_key = f"TIKTOK_COOKIES_{acct_name.upper()}"
+                    set_key(str(_ENV_FILE), env_key, new_path)
+                    st.success(_t(
+                        "已保存，请重启 Streamlit 使新配置生效。",
+                        "Saved. Please restart Streamlit for the change to take effect.",
+                    ))
+    else:
+        st.info(_t("尚未配置任何 TikTok 账号。", "No TikTok accounts configured yet."))
+
+    st.divider()
+
+    # ── Add new account ───────────────────────────────────────────────────
+    st.subheader(_t("添加新账号", "Add New Account"))
+    with st.form("add_account_form"):
+        new_name = st.text_input(
+            _t("账号名（英文，不含空格）", "Account name (letters/numbers, no spaces)"),
+            placeholder="e.g. myaccount",
+        )
+        new_cookies = st.text_input(
+            _t("Cookies 文件路径", "Cookies file path"),
+            placeholder="cookies/myaccount.txt",
+        )
+        submitted = st.form_submit_button(_t("➕ 添加账号", "➕ Add Account"))
+
+    if submitted:
+        name_clean = new_name.strip().replace(" ", "_").upper()
+        path_clean = new_cookies.strip()
+        if not name_clean:
+            st.error(_t("账号名不能为空。", "Account name cannot be empty."))
+        elif not path_clean:
+            st.error(_t("Cookies 路径不能为空。", "Cookies path cannot be empty."))
+        elif name_clean in [a.upper() for a in raw_accounts]:
+            st.error(_t("该账号名已存在。", "Account name already exists."))
+        else:
+            env_key = f"TIKTOK_COOKIES_{name_clean}"
+            set_key(str(_ENV_FILE), env_key, path_clean)
+            st.success(_t(
+                f"账号 {name_clean.lower()} 已添加，请重启 Streamlit 使配置生效。",
+                f"Account {name_clean.lower()} added. Please restart Streamlit to apply.",
+            ))
 
 
 # ─── Legacy single-clip form (backward compat) ───────────────────────────────
@@ -1471,6 +1602,9 @@ with st.sidebar:
     if st.button(_t("📋 历史记录", "📋 History"), use_container_width=True, key="sb_history"):
         st.session_state["page"] = "history"
         st.rerun()
+    if st.button(_t("👤 账号管理", "👤 Accounts"), use_container_width=True, key="sb_accounts"):
+        st.session_state["page"] = "accounts"
+        st.rerun()
 
 # ─── Session state defaults ───────────────────────────────────────────────────
 
@@ -1549,3 +1683,10 @@ elif _page == "execution":
 
 elif _page == "history":
     _render_history_panel()
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ACCOUNTS
+# ══════════════════════════════════════════════════════════════════════════════
+
+elif _page == "accounts":
+    _render_accounts_panel()

@@ -18,6 +18,9 @@ env/
 .streamlit/
 .vscode/
 
+# Claude Code project memory
+.claude/
+
 # Project runtime outputs
 tmp/
 history.json
