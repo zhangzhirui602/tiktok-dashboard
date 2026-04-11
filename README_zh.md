@@ -1,26 +1,50 @@
 # TikTok Dashboard
 
-一个基于 Streamlit 的可视化面板，用于串联短视频全流程：
+一个基于 Streamlit 的多片段 TikTok 自动化面板，支持任务断点续传。
 
-1. 使用 Seedance API 生成视频
-2. 下载生成的视频到本地
-3. 使用 Whisper 生成字幕
-4. 使用 FFmpeg 流程进行剪辑与合成
-5. 使用浏览器自动化上传到 TikTok
+当前完整流程：
 
-本项目是一个轻量 UI 层，依赖以下同级项目能力：
+1. 使用 Seedance API 按多个 Prompt 生成片段
+2. 逐片段预览并确认
+3. 使用 FFmpeg 合并已确认片段
+4. 使用 Whisper 生成字幕（逐词/逐句可选），并在上传前编辑 SRT
+5. 上传到一个或多个 TikTok 账号
+
+本项目是一个 UI/编排层，依赖以下同级项目能力：
 
 - Video-Editing-FFmpeg-librosa-Whisper-
 - tiktok-uploader-mcp
 
 ## 功能特性
 
-- 页面支持中英文切换
-- 一键执行完整流程，并显示分步进度
-- 从环境变量自动识别 TikTok 账号
-- 从当前视频工程读取可用音频
-- 提供历史记录面板
-- 上传失败时提供更详细的错误信息
+- 支持中英文界面切换
+- 任务化流程与断点续传（状态持久化在 tmp/jobs）
+- 片段级控制：重试、改 Prompt 重生、逐片段确认
+- BGM 管理器（assets/bgm）：上传、试听、删除、BPM 分析、建议片段数
+- 字幕流程：可选 Whisper 语言/模型、字幕显示模式（逐词/逐句）、字幕预览编辑、可一键重新识别
+- 多账号上传，失败信息更可读
+
+## 字幕显示规则
+
+- `word`：逐词显示（类似卡拉 OK）
+- `sentence`：逐句显示，按以下规则切分：
+  - 标点边界：`,` `，` `.` `。` `?` `？` `!` `！`
+  - 无标点时按停顿阈值自动分句
+  - 单条字幕最多 12 个词
+  - 逗号保留在前一句末尾
+- 无论走 Whisper Python API 还是 Whisper CLI 回退路径，行为保持一致
+
+## 模块状态（UI v2）
+
+- 已完成：模块 1 BGM 管理器
+- 已完成：模块 2 任务创建面板
+- 规划中：模块 3 AI Prompt 扩展
+- 已完成：模块 4 断点续传系统
+- 已完成：模块 5 执行面板
+- 已完成：模块 6 字幕生成与确认
+- 已完成：模块 7 上传（基础立即上传；定时发布尚未实现）
+- 已完成：模块 8 历史记录
+- 规划中：模块 9 账号管理
 
 ## 运行要求
 
@@ -34,12 +58,14 @@
 
 ```
 tiktok-dashboard/
-  app.py              # Streamlit 页面
-  pipeline.py         # 流程编排逻辑
-  .env.example        # 环境变量模板
-  requirements.txt    # 依赖列表
-  cookies/            # 本地 cookies（已加入 gitignore）
-  tmp/                # 临时文件（已加入 gitignore）
+  app.py                    # Streamlit 页面（dashboard v2）
+  pipeline.py               # 生成/合并/字幕/上传编排
+  job_state.py              # 任务状态持久化与断点续传逻辑
+  modules/bgm_manager.py    # BGM 文件管理与 BPM 分析
+  requirements.txt          # 面板依赖
+  cookies/                  # 本地 cookies（已加入 gitignore）
+  tmp/                      # 任务运行时文件（已加入 gitignore）
+  assets/bgm/               # 本地 BGM 库（已加入 gitignore）
 ```
 
 ## 安装与配置
@@ -51,20 +77,21 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 ```
 
-### 2. 安装依赖
+### 2. 安装面板依赖
 
 ```powershell
 pip install -r requirements.txt
 ```
 
-上传步骤还需要 TikTok uploader 相关依赖：
+### 3. 安装同级项目依赖
 
 ```powershell
-pip install pydantic playwright pytz toml
+pip install -r ..\Video_Editing_FFmpeg_librosa_Whisper\Video-Editing-FFmpeg-librosa-Whisper-\requirements.txt
+pip install -r ..\mcp-tiktok-uploader-mcp\tiktok-uploader-mcp\requirements.txt
 python -m playwright install chromium
 ```
 
-### 3. 配置环境变量
+### 4. 配置环境变量
 
 ```powershell
 Copy-Item .env.example .env
@@ -81,9 +108,9 @@ Copy-Item .env.example .env
 TIKTOK_COOKIES_MAIN=cookies/main_account.txt
 ```
 
-### 4. 确保同级仓库路径可用
+### 5. 确保同级仓库路径可用
 
-当前 pipeline.py 默认依赖以下目录结构：
+默认依赖以下目录结构：
 
 - Video_Editing_FFmpeg_librosa_Whisper/Video-Editing-FFmpeg-librosa-Whisper-
 - mcp-tiktok-uploader-mcp/tiktok-uploader-mcp
@@ -96,39 +123,47 @@ TIKTOK_COOKIES_MAIN=cookies/main_account.txt
 streamlit run app.py
 ```
 
-在浏览器打开 Streamlit 输出的本地地址即可。
+在浏览器打开 Streamlit 输出的本地地址。
 
 ## 常见问题
 
 ### 1. 上传步骤出现 NotImplementedError（Windows）
 
-项目已在上传前加入 Windows 事件循环策略修复。
-若仍报错，请完整重启一次 Streamlit 进程后重试。
+项目已在上传前设置 Windows Proactor 事件循环策略。
+若仍报错，请完整重启 Streamlit 后重试。
 
 ### 2. 上传步骤提示缺少模块
 
-请确认当前 Streamlit 使用的虚拟环境中已安装依赖。
-常见缺失：pydantic、playwright。
+请确认 Streamlit 当前使用的 Python 环境已安装依赖。
 
 ### 3. 上传步骤认证失败
 
 请检查：
 
 - cookies 文件是否存在
-- .env 中路径是否正确
+- TIKTOK_COOKIES_<账号名> 路径是否正确
 - cookies 是否仍包含有效 sessionid/sessionid_ss/sid_tt
 
-### 4. Whisper 或字幕步骤失败
+### 4. Whisper 或字幕步骤失败，或字幕仍是整句
 
-请检查视频编辑项目中的依赖和配置：
+请检查：
 
-- librosa
-- openai-whisper
-- 当前项目 raw_materials/song 中存在可用音频
+- 当前环境已安装 openai-whisper
+- ffmpeg 在 PATH 中可用
+- 选用的 BGM 或合并视频中有人声音轨
+
+说明：
+
+- 若未安装 `openai-whisper`，程序会自动回退到 `whisper` CLI。
+- `word` 模式输出逐词 SRT。
+- `sentence` 模式会将 SRT 归一化为逐句结果（标点分句 + 停顿兜底 + 12 词上限）。
+
+当前流程支持在界面中重新识别，并在确认前手动编辑 SRT。
 
 ## 安全说明
 
 - 不要提交 .env 和 cookies 文件
+- 本地音频素材放在 assets/bgm（已加入 gitignore）
 - 如密钥或 cookies 泄露，请立即更换
 
 ## 许可说明

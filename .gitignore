@@ -22,8 +22,14 @@ env/
 tmp/
 history.json
 
+# Local media assets
+assets/bgm/
+
 # Sensitive account data
 cookies/
+
+# Temporary test scripts
+test_*.py
 
 # OS files
 .DS_Store

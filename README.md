@@ -1,45 +1,71 @@
 # TikTok Dashboard
 
-A Streamlit dashboard that orchestrates an end-to-end short-video pipeline:
+A Streamlit dashboard for multi-clip TikTok video production with checkpoint resume.
 
-1. Generate a video with Seedance API
-2. Download the generated video locally
-3. Generate subtitles with Whisper
-4. Edit and compose video with FFmpeg-based tooling
-5. Upload to TikTok with browser automation
+Current end-to-end flow:
 
-This dashboard is a lightweight UI layer on top of two sibling projects:
+1. Generate multiple clips from prompts via Seedance API
+2. Review and confirm clips one by one
+3. Merge confirmed clips with FFmpeg
+4. Generate subtitles with Whisper (word-by-word or sentence-by-sentence), edit SRT, preview burned result before upload
+5. Upload to one or more TikTok accounts
+
+This dashboard is a UI/orchestration layer on top of sibling repositories:
 
 - Video-Editing-FFmpeg-librosa-Whisper-
 - tiktok-uploader-mcp
 
 ## Features
 
-- Bilingual UI: Chinese and English switch in the page
-- One-click pipeline execution with step-by-step progress
-- Select TikTok account from environment variables
-- Audio selection from active video-editor project
-- History panel for recent runs
-- Improved upload diagnostics for easier debugging
+- Bilingual UI (Chinese and English)
+- Job-based workflow with persistent checkpoint resume (state stored in tmp/jobs)
+- Clip-level controls: retry, regenerate with edited prompt, per-clip confirmation
+- BGM Manager (assets/bgm): upload, preview, delete, BPM analysis, suggested clip count
+- Subtitle workflow: Whisper model/language options, subtitle display mode (word/sentence), SRT preview/edit, re-run recognition
+- Multi-account TikTok upload with clearer failure diagnostics
+
+## Subtitle Display Behavior
+
+- `word`: one subtitle entry per word (karaoke-like)
+- `sentence`: sentence-level grouping with these boundaries:
+	- punctuation: `,` `，` `.` `。` `?` `？` `!` `！`
+	- pause fallback when no punctuation is present
+	- hard cap: 12 words per subtitle entry
+	- comma stays at the end of the previous sentence
+- Behavior is consistent for both Whisper Python API and Whisper CLI fallback outputs
+
+## Module Status (UI v2)
+
+- Done: Module 1 BGM Manager
+- Done: Module 2 Job Creation Panel
+- Planned: Module 3 AI Prompt Expansion
+- Done: Module 4 Checkpoint Resume System
+- Done: Module 5 Execution Panel
+- Done: Module 6 Subtitle Generation and Review
+- Done: Module 7 Upload (basic immediate upload; scheduled upload not yet implemented)
+- Done: Module 8 History Panel
+- Planned: Module 9 Account Management
 
 ## Requirements
 
 - Windows (recommended for this workspace setup)
 - Python 3.10+
 - FFmpeg installed and available in PATH
-- A valid ARK API key for Seedance
+- Valid ARK API key for Seedance
 - TikTok cookies exported in Netscape format
 
 ## Project Structure
 
 ```
 tiktok-dashboard/
-	app.py              # Streamlit UI
-	pipeline.py         # Orchestration logic
-	.env.example        # Environment template
-	requirements.txt    # Dashboard dependencies
-	cookies/            # Local cookies files (ignored by git)
-	tmp/                # Temporary files (ignored by git)
+	app.py                    # Streamlit UI (dashboard v2)
+	pipeline.py               # Clip generation / merge / SRT / upload orchestration
+	job_state.py              # Persistent job state and checkpoint logic
+	modules/bgm_manager.py    # BGM file management and BPM analysis
+	requirements.txt          # Dashboard dependencies
+	cookies/                  # Local cookies files (ignored by git)
+	tmp/                      # Job runtime files and outputs (ignored by git)
+	assets/bgm/               # Local BGM library (ignored by git)
 ```
 
 ## Setup
@@ -51,29 +77,30 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 ```
 
-### 2. Install dependencies
+### 2. Install dashboard dependencies
 
 ```powershell
 pip install -r requirements.txt
 ```
 
-The upload step also requires dependencies from the TikTok uploader stack:
+### 3. Install sibling stack dependencies
 
 ```powershell
-pip install pydantic playwright pytz toml
+pip install -r ..\Video_Editing_FFmpeg_librosa_Whisper\Video-Editing-FFmpeg-librosa-Whisper-\requirements.txt
+pip install -r ..\mcp-tiktok-uploader-mcp\tiktok-uploader-mcp\requirements.txt
 python -m playwright install chromium
 ```
 
-### 3. Configure environment
+### 4. Configure environment variables
 
 ```powershell
 Copy-Item .env.example .env
 ```
 
-Edit .env and set:
+Set at least:
 
 - ARK_API_KEY
-- TIKTOK_COOKIES_<ACCOUNT_NAME> entries
+- TIKTOK_COOKIES_<ACCOUNT_NAME>
 
 Example:
 
@@ -81,14 +108,14 @@ Example:
 TIKTOK_COOKIES_MAIN=cookies/main_account.txt
 ```
 
-### 4. Prepare sibling repositories
+### 5. Verify sibling repository paths
 
-This dashboard expects sibling folders under Desktop:
+Expected sibling folders under Desktop:
 
 - Video_Editing_FFmpeg_librosa_Whisper/Video-Editing-FFmpeg-librosa-Whisper-
 - mcp-tiktok-uploader-mcp/tiktok-uploader-mcp
 
-If your folder names differ, update path constants in pipeline.py.
+If your paths differ, update constants in pipeline.py.
 
 ## Run
 
@@ -96,41 +123,49 @@ If your folder names differ, update path constants in pipeline.py.
 streamlit run app.py
 ```
 
-Open the local URL shown by Streamlit in your browser.
+Open the local URL shown by Streamlit.
 
 ## Troubleshooting
 
-### Upload step fails with NotImplementedError on Windows
+### Upload fails with NotImplementedError on Windows
 
-The pipeline includes a Windows event-loop policy fix before Playwright upload.
-If you still see this error, fully restart Streamlit and run again.
+The pipeline sets Windows Proactor event-loop policy before Playwright upload.
+If the error persists, restart Streamlit and retry.
 
-### Upload step fails with missing package errors
+### Upload fails with missing package errors
 
-Install missing packages in the same virtual environment used by Streamlit.
-Common ones: pydantic, playwright.
+Install dependencies in the same Python environment used by Streamlit.
 
-### Upload step fails with authentication errors
+### Upload authentication fails
 
-Check that:
+Check:
 
 - cookies file exists
-- cookies path in .env is correct
+- TIKTOK_COOKIES_<ACCOUNT_NAME> path is correct
 - cookies still include valid sessionid/sessionid_ss/sid_tt
 
-### Whisper or subtitle step fails
+### Whisper/subtitle stage fails or subtitles are sentence-level
 
-Check dependencies and configuration in the video-editor project:
+Check:
 
-- librosa
-- openai-whisper
-- valid audio file in active project raw_materials/song
+- openai-whisper is installed in the active environment
+- ffmpeg is available in PATH
+- selected BGM or merged video contains audible vocals
+
+Notes:
+
+- If `openai-whisper` is unavailable, the app automatically falls back to `whisper` CLI.
+- `word` mode outputs word-level SRT.
+- `sentence` mode normalizes SRT into sentence-level entries with punctuation, pause fallback, and 12-word max-length splitting.
+
+The app allows re-running recognition and manual SRT editing before confirmation.
 
 ## Security Notes
 
 - Never commit .env or cookies files
-- Rotate API keys and cookies if accidentally exposed
+- Keep local media under assets/bgm (ignored by git)
+- Rotate API keys/cookies immediately if exposed
 
 ## License
 
-Follow the licenses of the integrated upstream repositories and your internal usage policy.
+Follow licenses of upstream repositories and your internal usage policy.
