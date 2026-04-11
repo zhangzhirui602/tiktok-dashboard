@@ -277,11 +277,161 @@ def _expand_srt_to_word_level(srt_text: str) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def _normalize_srt_to_sentence_level(srt_text: str, max_words_per_sentence: int = 12) -> str:
+    """Normalize SRT text to sentence-level subtitles.
+
+    This is primarily used for Whisper CLI outputs where sentence mode may still
+    arrive as long segment-level lines.
+    """
+
+    # First expand to synthetic word-level timing so we can reuse sentence grouping.
+    expanded = _expand_srt_to_word_level(srt_text)
+    blocks = re.split(r"\r?\n\r?\n", expanded.strip())
+
+    word_entries: list[tuple[int, int, str]] = []
+    for block in blocks:
+        raw_lines = [ln.strip() for ln in block.splitlines() if ln.strip()]
+        if len(raw_lines) < 2:
+            continue
+
+        if re.fullmatch(r"\d+", raw_lines[0]):
+            ts_line = raw_lines[1]
+            text_lines = raw_lines[2:]
+        else:
+            ts_line = raw_lines[0]
+            text_lines = raw_lines[1:]
+
+        if "-->" not in ts_line:
+            continue
+
+        start_s, end_s = (p.strip() for p in ts_line.split("-->", 1))
+        try:
+            s_ms = _srt_time_to_ms(start_s)
+            e_ms = _srt_time_to_ms(end_s)
+        except ValueError:
+            continue
+
+        text = " ".join(text_lines).strip()
+        if not text:
+            continue
+        word_entries.append((s_ms, max(s_ms + 1, e_ms), text))
+
+    if not word_entries:
+        return srt_text.rstrip() + "\n"
+
+    sentences = _group_words_into_sentences(
+        word_entries,
+        max_words_per_sentence=max_words_per_sentence,
+    )
+
+    lines: list[str] = []
+    for idx, (s_ms, e_ms, text) in enumerate(sentences, start=1):
+        lines += [str(idx), f"{_ms_to_srt_time(s_ms)} --> {_ms_to_srt_time(e_ms)}", text, ""]
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _group_words_into_sentences(
+    word_entries: list[tuple[int, int, str]],
+    pause_threshold_ms: int = 350,
+    max_words_per_sentence: int = 12,
+) -> list[tuple[int, int, str]]:
+    """Group word-level (start_ms, end_ms, text) entries into sentence-level entries.
+
+    Boundaries are determined by:
+    - sentence punctuation (comma/period/question/exclamation, Chinese+English),
+    - pause between words >= pause_threshold_ms,
+    - max_words_per_sentence limit,
+    - or end of input.
+    """
+
+    def _word_ends_with_boundary_punct(word: str) -> bool:
+        trimmed = re.sub(r"[\s\"'”’)\]\}）】》」]+$", "", word)
+        return bool(trimmed) and trimmed[-1] in ",，.。!?！？"
+
+    def _join_sentence_words(words: list[str]) -> str:
+        # Keep punctuation attached to previous token in spaced languages.
+        joined = " ".join(words).strip()
+        return re.sub(r"\s+([,，.。!?！？])", r"\1", joined)
+
+    sentences: list[tuple[int, int, str]] = []
+    if not word_entries:
+        return sentences
+
+    sent_start = word_entries[0][0]
+    sent_words: list[str] = []
+
+    for i, (s_ms, e_ms, word) in enumerate(word_entries):
+        sent_words.append(word)
+        is_last = i == len(word_entries) - 1
+        should_split = False
+
+        if _word_ends_with_boundary_punct(word):
+            should_split = True
+
+        if not should_split and len(sent_words) >= max_words_per_sentence:
+            should_split = True
+
+        if not should_split and not is_last:
+            next_s_ms = word_entries[i + 1][0]
+            if next_s_ms - e_ms >= pause_threshold_ms:
+                should_split = True
+
+        if is_last:
+            should_split = True
+
+        if should_split:
+            sentence_text = _join_sentence_words(sent_words)
+            if sentence_text:
+                sentences.append((sent_start, e_ms, sentence_text))
+            if not is_last:
+                sent_start = word_entries[i + 1][0]
+            sent_words = []
+
+    return sentences
+
+
+def _split_text_into_sentences(text: str, max_words_per_sentence: int = 12) -> list[str]:
+    """Split plain text into sentence-like chunks by punctuation and max length.
+
+    Used when Whisper does not provide per-word timestamps.
+    """
+
+    tokens = _split_words_for_srt(text)
+    if not tokens:
+        return []
+
+    def _ends_with_boundary_punct(token: str) -> bool:
+        trimmed = re.sub(r"[\s\"'”’)\]\}）】》」]+$", "", token)
+        return bool(trimmed) and trimmed[-1] in ",，.。!?！？"
+
+    def _join_tokens(parts: list[str]) -> str:
+        joined = " ".join(parts).strip()
+        return re.sub(r"\s+([,，.。!?！？])", r"\1", joined)
+
+    chunks: list[str] = []
+    current: list[str] = []
+    for token in tokens:
+        current.append(token)
+        if _ends_with_boundary_punct(token) or len(current) >= max_words_per_sentence:
+            chunk = _join_tokens(current)
+            if chunk:
+                chunks.append(chunk)
+            current = []
+
+    if current:
+        chunk = _join_tokens(current)
+        if chunk:
+            chunks.append(chunk)
+
+    return chunks
+
+
 def _run_whisper(
     audio_path: str,
     out_srt: Path,
     model_name: str = "medium",
     language: str | None = None,
+    subtitle_display: str = "word",
 ) -> None:
     """Transcribe audio with Whisper and write SRT to out_srt.
     Tries Python API first, falls back to CLI. No sibling-repo dependency.
@@ -317,7 +467,8 @@ def _run_whisper(
         idx = 1
 
         if all_words:
-            # Word-level SRT: one entry per word with Whisper's precise timestamps
+            # Collect word-level entries: (start_ms, end_ms, text)
+            word_entries: list[tuple[int, int, str]] = []
             for i, w in enumerate(all_words):
                 word = w.get("word", "").strip()
                 if not word:
@@ -328,27 +479,71 @@ def _run_whisper(
                     e_ms = max(s_ms + 1, min(int(round(float(w["end"]) * 1000)), next_s_ms - 50))
                 else:
                     e_ms = max(s_ms + 1, int(round(float(w["end"]) * 1000)))
-                lines += [str(idx), f"{_ms_to_srt_time(s_ms)} --> {_ms_to_srt_time(e_ms)}", word, ""]
+
+                # Some Whisper outputs may place multiple words in one "word" token.
+                # Expand and spread timing so sentence splitting rules can still apply.
+                sub_words = _split_words_for_srt(word)
+                if len(sub_words) <= 1:
+                    word_entries.append((s_ms, e_ms, word))
+                    continue
+
+                duration = max(1, e_ms - s_ms)
+                per_sub_ms = max(1, duration // len(sub_words))
+                for si, sub_word in enumerate(sub_words):
+                    sw_s = s_ms + si * per_sub_ms
+                    sw_e = sw_s + per_sub_ms if si < len(sub_words) - 1 else e_ms
+                    word_entries.append((sw_s, sw_e, sub_word))
+
+            if subtitle_display == "sentence":
+                entries = _group_words_into_sentences(word_entries)
+            else:
+                entries = word_entries
+
+            for s_ms, e_ms, text in entries:
+                lines += [str(idx), f"{_ms_to_srt_time(s_ms)} --> {_ms_to_srt_time(e_ms)}", text, ""]
                 idx += 1
         else:
             # Fallback: Whisper returned no per-word timestamps (common with music/BGM).
-            # Split each segment's text into words and distribute time proportionally.
             for seg in result.get("segments", []):
                 text = seg["text"].strip()
                 if not text:
                     continue
                 seg_s_ms = int(round(float(seg["start"]) * 1000))
                 seg_e_ms = max(seg_s_ms + 1, int(round(float(seg["end"]) * 1000)))
-                words = [w for w in text.split() if w]
-                if not words:
-                    continue
-                duration = seg_e_ms - seg_s_ms
-                per_word_ms = duration // len(words)
-                for wi, word in enumerate(words):
-                    w_s = seg_s_ms + wi * per_word_ms
-                    w_e = w_s + per_word_ms if wi < len(words) - 1 else seg_e_ms
-                    lines += [str(idx), f"{_ms_to_srt_time(w_s)} --> {_ms_to_srt_time(w_e)}", word, ""]
-                    idx += 1
+                if subtitle_display == "sentence":
+                    sentence_chunks = _split_text_into_sentences(text, max_words_per_sentence=12)
+                    if not sentence_chunks:
+                        continue
+
+                    seg_duration = seg_e_ms - seg_s_ms
+                    token_counts = [max(1, len(_split_words_for_srt(chunk))) for chunk in sentence_chunks]
+                    total_tokens = max(1, sum(token_counts))
+                    consumed_tokens = 0
+                    cur_start = seg_s_ms
+
+                    for si, chunk in enumerate(sentence_chunks):
+                        consumed_tokens += token_counts[si]
+                        if si == len(sentence_chunks) - 1:
+                            cur_end = seg_e_ms
+                        else:
+                            ratio_end = seg_s_ms + int(round(seg_duration * (consumed_tokens / total_tokens)))
+                            cur_end = max(cur_start + 1, min(ratio_end, seg_e_ms))
+
+                        lines += [str(idx), f"{_ms_to_srt_time(cur_start)} --> {_ms_to_srt_time(cur_end)}", chunk, ""]
+                        idx += 1
+                        cur_start = cur_end
+                else:
+                    # Split into words and distribute time proportionally.
+                    words = [w for w in text.split() if w]
+                    if not words:
+                        continue
+                    duration = seg_e_ms - seg_s_ms
+                    per_word_ms = duration // len(words)
+                    for wi, word in enumerate(words):
+                        w_s = seg_s_ms + wi * per_word_ms
+                        w_e = w_s + per_word_ms if wi < len(words) - 1 else seg_e_ms
+                        lines += [str(idx), f"{_ms_to_srt_time(w_s)} --> {_ms_to_srt_time(w_e)}", word, ""]
+                        idx += 1
 
         out_srt.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
         return
@@ -384,10 +579,14 @@ def _run_whisper(
         else:
             raise FileNotFoundError(f"Whisper CLI completed but no SRT found in {out_srt.parent}")
 
-    # Normalize CLI output to word-level SRT so UI karaoke display can highlight word by word.
+    # Normalize CLI output so sentence/word modes are consistent with API path.
     try:
-        expanded = _expand_srt_to_word_level(out_srt.read_text(encoding="utf-8"))
-        out_srt.write_text(expanded, encoding="utf-8")
+        original = out_srt.read_text(encoding="utf-8")
+        if subtitle_display == "sentence":
+            normalized = _normalize_srt_to_sentence_level(original, max_words_per_sentence=12)
+        else:
+            normalized = _expand_srt_to_word_level(original)
+        out_srt.write_text(normalized, encoding="utf-8")
     except Exception:
         # Keep original CLI output if normalization fails.
         pass
@@ -753,10 +952,11 @@ def run_job_srt(
 
     whisper_model = job.params.get("whisper_model", "medium")
     whisper_language = job.params.get("whisper_language") or None  # None = auto-detect
+    subtitle_display = job.params.get("subtitle_display", "word")
 
     try:
         out_srt = job.job_dir / "subtitle.srt"
-        _run_whisper(audio_for_srt or merge_output, out_srt, model_name=whisper_model, language=whisper_language)
+        _run_whisper(audio_for_srt or merge_output, out_srt, model_name=whisper_model, language=whisper_language, subtitle_display=subtitle_display)
         srt_path = str(out_srt)
         srt_content = out_srt.read_text(encoding="utf-8")
         job.set_stage_done(

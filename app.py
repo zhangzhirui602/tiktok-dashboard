@@ -498,6 +498,14 @@ def _render_job_creation_panel() -> None:
             key="job_subtitle_mode",
         )
 
+    if st.session_state.get("job_subtitle_mode", "whisper") == "whisper":
+        st.selectbox(
+            _t("字幕显示方式", "Subtitle display"),
+            ["word", "sentence"],
+            format_func=lambda v: _t("逐词显示", "Word by word") if v == "word" else _t("逐句显示", "Sentence by sentence"),
+            key="job_subtitle_display",
+        )
+
     col_lang, col_model = st.columns(2)
     with col_lang:
         st.selectbox(
@@ -614,6 +622,7 @@ def _render_job_creation_panel() -> None:
                 beats_per_cut  = int(st.session_state.get("bgm_beats_per_cut", 2)),
                 bpm            = (st.session_state.get(f"bgm_analysis_{st.session_state.get('job_bgm_path', '')}", {}) or {}).get("bpm"),
                 subtitle_mode     = st.session_state.get("job_subtitle_mode", "whisper"),
+                subtitle_display  = st.session_state.get("job_subtitle_display", "word"),
                 whisper_model     = st.session_state.get("job_whisper_model", "medium"),
                 whisper_language  = (lambda v: None if v == "auto" else v)(st.session_state.get("job_whisper_language", "auto")),
                 scheduled_at   = scheduled_at,
