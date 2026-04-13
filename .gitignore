@@ -17,6 +17,7 @@ env/
 # Streamlit and editor settings
 .streamlit/
 .vscode/
+*.code-workspace
 
 # Claude Code project memory
 .claude/
