@@ -47,13 +47,12 @@ from modules.bgm_manager import (
     list_bgm_files,
     save_uploaded_bgm,
 )
-from pipeline import STEPS, STYLE_MAP, burn_subtitles, list_audio_files, run_job_clips, run_job_merge, run_job_srt, run_job_upload, run_pipeline
+from pipeline import STEPS, burn_subtitles, list_audio_files, run_job_clips, run_job_merge, run_job_srt, run_job_upload, run_pipeline
 
 load_dotenv()
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-STYLE_OPTIONS = list(STYLE_MAP.keys())
 
 _STEP_LABELS: dict[str, dict[str, str]] = {
     "zh": {
@@ -109,24 +108,6 @@ def _get_tiktok_accounts() -> list[str]:
     ]
     return accounts or ["default"]
 
-
-def _style_label(key: str) -> str:
-    _maps = {
-        "zh": {
-            "vintage":   "🎞 Vintage（复古）",
-            "neon":      "🌿 Neon → 清新自然",
-            "cinematic": "🎬 Cinematic（电影感）",
-            "minimal":   "⬜ Minimal（无滤镜）",
-        },
-        "en": {
-            "vintage":   "🎞 Vintage",
-            "neon":      "🌿 Neon → Fresh Natural",
-            "cinematic": "🎬 Cinematic",
-            "minimal":   "⬜ Minimal",
-        },
-    }
-    lang = st.session_state.get("lang", "zh")
-    return _maps.get(lang, _maps["zh"]).get(key, key)
 
 
 # ─── Background thread management ────────────────────────────────────────────
@@ -417,13 +398,11 @@ def _render_job_creation_panel() -> None:
         st.session_state[_synced_key] = suggested
 
     # ── Basic info row ────────────────────────────────────────────────────
-    c1, c2, c3 = st.columns([2, 2, 1])
+    c1, c2 = st.columns(2)
     with c1:
         st.text_input(_t("歌曲名称", "Song Title"), key="job_song")
     with c2:
         st.text_input(_t("艺术家", "Artist"), key="job_artist")
-    with c3:
-        st.selectbox(_t("视频风格", "Style"), STYLE_OPTIONS, format_func=_style_label, key="job_style")
 
     st.divider()
 
@@ -619,7 +598,6 @@ def _render_job_creation_panel() -> None:
         else:
             _new_job = JobState.create(
                 prompts        = final_prompts,
-                style          = st.session_state.get("job_style", "minimal"),
                 tiktok_accounts= accounts,
                 bgm_path       = st.session_state.get("job_bgm_path"),
                 resolution     = st.session_state.get("job_resolution", "480p"),
@@ -1511,7 +1489,6 @@ def _render_legacy_form() -> None:
 
         col1, col2 = st.columns(2)
         with col1:
-            style    = st.selectbox(_t("视频风格", "Style"), STYLE_OPTIONS, format_func=_style_label)
             duration = st.slider(_t("时长(秒)", "Duration (s)"), 5, 15, 5)
         with col2:
             account    = st.selectbox(_t("TikTok 账号", "Account"), _get_tiktok_accounts())
@@ -1549,7 +1526,6 @@ def _render_legacy_form() -> None:
         _render_steps()
         for step, status, detail in run_pipeline(
             prompt=prompt.strip(),
-            style=style,
             tiktok_account=account,
             audio_path=selected_audio,
             resolution=resolution,

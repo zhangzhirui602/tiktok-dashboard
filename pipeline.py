@@ -593,7 +593,7 @@ def _run_whisper(
 
 
 def _run_edit_pipeline(
-    video_path: Path, srt_path: str, style: str | None, audio_path: str | None = None
+    video_path: Path, srt_path: str, audio_path: str | None = None
 ) -> str:
     """Copy video into the video editor project and run the pipeline.
     Returns the final output file path."""
@@ -624,7 +624,6 @@ def _run_edit_pipeline(
             project_dir=project_dir,
             prepared_srt_path=srt_path,
             quiet=True,
-            style=style,
         )
     finally:
         if _prev is None:
@@ -705,13 +704,6 @@ STEPS = [
     "upload_tiktok",
 ]
 
-STYLE_MAP: dict[str, str | None] = {
-    "vintage": "vintage_film",
-    "neon": "fresh_natural",
-    "cinematic": "cinematic",
-    "minimal": None,
-}
-
 
 def list_audio_files() -> list[str]:
     """Return absolute paths of audio files in the active project's song directory."""
@@ -733,7 +725,6 @@ def list_audio_files() -> list[str]:
 
 def run_pipeline(
     prompt: str,
-    style: str,
     tiktok_account: str,
     audio_path: str | None = None,
     resolution: str = "480p",
@@ -747,7 +738,6 @@ def run_pipeline(
     tmp_dir = Path(__file__).parent / "tmp"
     tmp_dir.mkdir(exist_ok=True)
     raw_video_path = tmp_dir / f"seedance_{int(time.time())}.mp4"
-    mapped_style = STYLE_MAP.get(style, None)
 
     yield ("generate_video", "running", None)
     try:
@@ -777,7 +767,7 @@ def run_pipeline(
     yield ("edit_video", "running", None)
     final_output: str
     try:
-        final_output = _run_edit_pipeline(raw_video_path, srt_path, mapped_style, audio_path)
+        final_output = _run_edit_pipeline(raw_video_path, srt_path, audio_path)
         yield ("edit_video", "done", final_output)
     except Exception as exc:
         yield ("edit_video", "error", _format_exception(exc))
@@ -886,7 +876,6 @@ def run_job_merge(
     job.set_stage_running("merge")
 
     bgm_path = job.params.get("bgm_path")
-    mapped_style = STYLE_MAP.get(job.params.get("style", "minimal"), None)
     clip_paths = [
         c["local_path"] for c in job.clips
         if c["status"] == CLIP_DONE and c.get("confirmed", False) and c.get("local_path")
@@ -901,7 +890,7 @@ def run_job_merge(
         return
 
     try:
-        output_path = _merge_clips(job, clip_paths, bgm_path, mapped_style)
+        output_path = _merge_clips(job, clip_paths, bgm_path)
         job.set_stage_done("merge", output_path=output_path)
         job.overall_status = STATUS_PENDING_SRT
         job.save()
@@ -1129,7 +1118,6 @@ def _merge_clips(
     job: JobState,
     clip_paths: list[str],
     bgm_path: str | None,
-    style: str | None,
 ) -> str:
     """Concatenate clips with FFmpeg and overlay BGM. Returns output path.
 
