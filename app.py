@@ -201,9 +201,15 @@ def _render_bgm_manager() -> None:
             key="bgm_upload",
         )
         if up is not None:
-            dest = save_uploaded_bgm(up)
-            st.success(_t(f"已保存：{dest.name}", f"Saved: {dest.name}"))
-            st.rerun()
+            if st.button(
+                _t("⬆️ 保存 BGM", "⬆️ Save BGM"),
+                type="primary",
+                key="bgm_upload_confirm",
+            ):
+                dest = save_uploaded_bgm(up)
+                st.session_state.pop("bgm_upload", None)
+                st.success(_t(f"已保存：{dest.name}", f"Saved: {dest.name}"))
+                st.rerun()
 
     # ── File list ─────────────────────────────────────────────────────────────
     bgm_files = list_bgm_files()
