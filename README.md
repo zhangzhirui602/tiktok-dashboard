@@ -20,7 +20,7 @@ This dashboard is a UI/orchestration layer on top of sibling repositories:
 - Bilingual UI (Chinese and English)
 - Job-based workflow with persistent checkpoint resume (state stored in tmp/jobs)
 - Clip-level controls: retry, regenerate with edited prompt, per-clip confirmation
-- BGM Manager (assets/bgm): upload, preview, delete, BPM analysis, suggested clip count
+- BGM Manager (assets/bgm): upload with explicit confirm button, preview, delete, BPM analysis, suggested clip count
 - Subtitle workflow: Whisper model/language options, subtitle display mode (word/sentence), SRT preview/edit, re-run recognition
 - Multi-account TikTok upload with clearer failure diagnostics
 - Scheduled TikTok posting: pass a publish datetime to tiktok-uploader so TikTok handles the scheduling natively
