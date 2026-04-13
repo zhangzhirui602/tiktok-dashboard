@@ -605,7 +605,7 @@ def _render_job_creation_panel() -> None:
                 duration       = int(st.session_state.get("job_duration", 5)),
                 beats_per_cut  = int(st.session_state.get("bgm_beats_per_cut", 2)),
                 bpm            = (st.session_state.get(f"bgm_analysis_{st.session_state.get('job_bgm_path', '')}", {}) or {}).get("bpm"),
-                subtitle_mode     = st.session_state.get("job_subtitle_mode", "whisper"),
+                subtitle_mode     = (lambda v: v if v in ("whisper", "none") else "whisper")(st.session_state.get("job_subtitle_mode", "whisper")),
                 subtitle_display  = st.session_state.get("job_subtitle_display", "word"),
                 whisper_model     = st.session_state.get("job_whisper_model", "medium"),
                 whisper_language  = (lambda v: None if v == "auto" else v)(st.session_state.get("job_whisper_language", "auto")),
@@ -733,6 +733,8 @@ def _render_merge_srt_panel(job: JobState) -> None:
     status    = job.overall_status
     post_busy = _is_post_running(job_id)
     subtitle_mode = job.params.get("subtitle_mode", "whisper")
+    if subtitle_mode not in ("whisper", "none"):
+        subtitle_mode = "whisper"
 
     merge_stage = job.stages.get("merge", {})
     srt_stage   = job.stages.get("srt",   {})
