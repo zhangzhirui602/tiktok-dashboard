@@ -632,6 +632,13 @@ def _is_post_running(job_id: str) -> bool:
     return t is not None and t.is_alive()
 
 
+@st.fragment(run_every=1.5)
+def _auto_refresh_ticker() -> None:
+    """Non-blocking auto-refresh: triggers a full page rerun every 1.5 s
+    without blocking the Streamlit thread (unlike time.sleep)."""
+    st.rerun()
+
+
 def _start_post_thread(job_id: str, run_srt: bool) -> None:
     """Start merge (+ optional SRT) thread. No-op if already running."""
     if _is_post_running(job_id):
@@ -1568,7 +1575,7 @@ with st.sidebar:
 
     _incomplete = get_incomplete_jobs()
     if _incomplete:
-        for _j in _incomplete[:6]:
+        for _j in _incomplete[:10]:
             _c      = _j.clip_counts()
             _badge  = " 🔄" if _j.overall_status == STATUS_GENERATING else ""
             _label  = f"{_j.song or _j.job_id[:8]}{_badge}  {_c[CLIP_DONE]}/{len(_j.clips)}"
@@ -1656,10 +1663,10 @@ elif _page == "execution":
     _render_execution_panel(_job)
 
     # Auto-rerun while any background thread is alive.
-    # sleep goes AFTER rendering so the page shows current state first.
+    # Uses a non-blocking fragment ticker instead of time.sleep() so that
+    # sidebar interactions (e.g. switching to another job) are not dropped.
     if _is_running(_job_id) or _is_post_running(_job_id):
-        time.sleep(1.5)
-        st.rerun()
+        _auto_refresh_ticker()
 
 # ══════════════════════════════════════════════════════════════════════════════
 # HISTORY

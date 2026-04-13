@@ -846,13 +846,20 @@ def run_job_clips(
         job.set_clip_done(idx, video_url, str(local_path))
         yield ("clip_done", {"index": idx, "video_url": video_url, "local_path": str(local_path)})
 
-    # Update overall status based on result
-    if job.all_clips_done():
+    # Update overall status based on result.
+    # Reload from disk first: the UI may have written STATUS_FAILED (Cancel button)
+    # while the thread was finishing the current clip.  If so, preserve it.
+    fresh = JobState.load(job.job_id)
+    if fresh.overall_status == STATUS_FAILED:
+        # Job was externally cancelled — keep FAILED, do not overwrite.
+        job = fresh
+    elif job.all_clips_done():
         job.overall_status = STATUS_PENDING_REVIEW
+        job.save()
     else:
         # Some clips failed or were interrupted; stay in generating so user can resume
         job.overall_status = STATUS_GENERATING
-    job.save()
+        job.save()
 
     yield ("job_clips_finished", {
         "done": len(job.done_clips()),

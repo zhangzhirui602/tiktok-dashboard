@@ -132,17 +132,21 @@ class JobState:
 
     @classmethod
     def load_all(cls) -> list["JobState"]:
-        """Load all jobs from disk, newest first."""
+        """Load all jobs from disk, newest first (by created_at timestamp)."""
         if not JOBS_DIR.exists():
             return []
         jobs = []
-        for job_dir in sorted(JOBS_DIR.iterdir(), reverse=True):
+        for job_dir in JOBS_DIR.iterdir():
             state_file = job_dir / "state.json"
             if state_file.exists():
                 try:
                     jobs.append(cls.load(job_dir.name))
                 except Exception:
                     pass
+        # Sort by created_at descending so newest jobs always appear first.
+        # Previously this sorted by directory name (random hex) which did NOT
+        # guarantee newest-first ordering.
+        jobs.sort(key=lambda j: j._data.get("created_at", ""), reverse=True)
         return jobs
 
     # ── Persistence ──────────────────────────────────────────────────────────
