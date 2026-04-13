@@ -58,7 +58,6 @@ class JobState:
     def create(
         cls,
         prompts: list[str],
-        style: str,
         tiktok_accounts: list[str],
         bgm_path: str | None = None,
         resolution: str = "480p",
@@ -91,7 +90,6 @@ class JobState:
             "overall_status": STATUS_CREATING,
             "params": {
                 "prompts": prompts,
-                "style": style,
                 "tiktok_accounts": tiktok_accounts,
                 "bgm_path": bgm_path,
                 "resolution": resolution,
