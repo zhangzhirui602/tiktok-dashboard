@@ -1,5 +1,11 @@
 # TikTok Dashboard
 
+**Author:** Zhang Zhirui  
+**Contact:** zhangzhiruizzr@gmail.com  
+**Copyright © 2026 Zhang Zhirui. All rights reserved.**
+
+This project was independently developed by Zhang Zhirui.
+
 A Streamlit dashboard for multi-clip TikTok video production with checkpoint resume.
 
 Current end-to-end flow:
@@ -14,6 +20,18 @@ This dashboard is a UI/orchestration layer on top of sibling repositories:
 
 - Video-Editing-FFmpeg-librosa-Whisper-
 - tiktok-uploader-mcp
+
+## Core Features
+
+| Feature | Description |
+|---|---|
+| **Multi-clip Video Generation** | Generate multiple video clips from text prompts via Seedance API |
+| **Subtitle Pipeline** | Auto-generate SRT with Whisper (word-by-word or sentence mode), edit in-browser, burn into final video |
+| **Upload Pipeline** | Automated TikTok upload via Playwright across multiple accounts, with scheduled posting support |
+| **Checkpoint Resume** | Job state persisted to disk — resume generation after interruption without losing progress |
+| **BGM Manager** | Upload, preview, delete local BGM files; BPM analysis with suggested clip count |
+| **Bilingual UI** | Full Chinese / English interface toggle |
+| **History & Accounts** | View past jobs, track TikTok post URLs, manage account cookies |
 
 ## Features
 
@@ -47,6 +65,19 @@ This dashboard is a UI/orchestration layer on top of sibling repositories:
 - Done: Module 7 Upload Scheduler (immediate + TikTok-native scheduled posting, post URL entry)
 - Done: Module 8 History Panel
 - Done: Module 9 Account Management
+
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| **UI Framework** | [Streamlit](https://streamlit.io) |
+| **Video Generation** | Seedance API (Volcano Engine ARK) |
+| **Video Editing** | FFmpeg |
+| **Audio Analysis** | librosa (BPM detection) |
+| **Speech Recognition** | OpenAI Whisper (Python API + CLI fallback) |
+| **Browser Automation** | Playwright (Chromium) |
+| **Language** | Python 3.10+ |
+| **State Persistence** | JSON files (tmp/jobs/) |
 
 ## Requirements
 

@@ -1,5 +1,11 @@
 # TikTok Dashboard
 
+**作者：** 张芷睿  
+**联系方式：** zhangzhiruizzr@gmail.com  
+**版权所有 © 2026 张芷睿。保留所有权利。**
+
+本项目由张芷睿独立开发。
+
 一个基于 Streamlit 的多片段 TikTok 自动化面板，支持任务断点续传。
 
 当前完整流程：
@@ -14,6 +20,18 @@
 
 - Video-Editing-FFmpeg-librosa-Whisper-
 - tiktok-uploader-mcp
+
+## 核心功能
+
+| 功能 | 说明 |
+|---|---|
+| **多片段视频生成** | 通过 Seedance API，根据文本 Prompt 批量生成视频片段 |
+| **字幕流水线** | Whisper 自动生成 SRT（逐词/逐句可选），支持浏览器内编辑并烧录至最终视频 |
+| **上传流水线** | Playwright 自动化多账号 TikTok 上传，支持定时发布 |
+| **断点续传** | 任务状态持久化到磁盘，中断后可恢复生成，不丢失进度 |
+| **BGM 管理器** | 上传、试听、删除本地 BGM；BPM 分析并自动推荐片段数量 |
+| **双语界面** | 支持中文/英文一键切换 |
+| **历史记录与账号管理** | 查看历史任务、记录 TikTok 帖子链接、管理账号 Cookie |
 
 ## 功能特性
 
@@ -47,6 +65,19 @@
 - 已完成：模块 7 上传调度（立即上传 + TikTok 原生定时发布，帖子链接记录）
 - 已完成：模块 8 历史记录
 - 已完成：模块 9 账号管理
+
+## 技术栈
+
+| 层级 | 技术 |
+|---|---|
+| **UI 框架** | [Streamlit](https://streamlit.io) |
+| **视频生成** | Seedance API（火山引擎 ARK） |
+| **视频剪辑** | FFmpeg |
+| **音频分析** | librosa（BPM 检测） |
+| **语音识别** | OpenAI Whisper（Python API + CLI 回退） |
+| **浏览器自动化** | Playwright（Chromium） |
+| **开发语言** | Python 3.10+ |
+| **状态持久化** | JSON 文件（tmp/jobs/） |
 
 ## 运行要求
 
