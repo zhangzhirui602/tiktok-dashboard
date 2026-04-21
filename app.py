@@ -47,6 +47,7 @@ from modules.bgm_manager import (
     list_bgm_files,
     save_uploaded_bgm,
 )
+from modules.prompt_expander import expand_prompts
 from pipeline import STEPS, burn_subtitles, list_audio_files, run_job_clips, run_job_merge, run_job_srt, run_job_upload, run_pipeline
 
 load_dotenv()
@@ -405,6 +406,63 @@ def _render_job_creation_panel() -> None:
         st.text_input(_t("艺术家", "Artist"), key="job_artist")
 
     st.divider()
+
+    # ── AI Prompt 扩展 ────────────────────────────────────────────────────
+    _has_text_endpoint = bool(os.environ.get("ARK_TEXT_ENDPOINT"))
+    if _has_text_endpoint:
+        with st.expander(
+            _t("✨ AI 自动生成 Prompts（可选）", "✨ AI Generate Prompts (optional)"),
+            expanded=False,
+        ):
+            st.caption(_t(
+                "根据歌曲名和艺术家，AI 会自动生成 MV 分镜 Prompt 并填入下方输入框，之后仍可手动修改。",
+                "AI will generate MV scene prompts based on song & artist and fill the inputs below — you can still edit them manually.",
+            ))
+            st.text_area(
+                _t("MV 整体风格描述（可选）", "MV style description (optional)"),
+                key="job_mv_style",
+                height=72,
+                placeholder=_t(
+                    "例如：暗色系霓虹美学，女主独舞，夜晚城市街道，情绪化特写镜头",
+                    "e.g. dark neon aesthetic, female solo dancer, urban streets at night, emotional close-up shots",
+                ),
+            )
+            if st.button(
+                _t("✨ AI 生成 Prompts", "✨ Generate with AI"),
+                key="ai_expand_prompts",
+                use_container_width=False,
+            ):
+                song = st.session_state.get("job_song", "").strip()
+                artist = st.session_state.get("job_artist", "").strip()
+                style = st.session_state.get("job_mv_style", "").strip()
+                _sync_prompt_inputs()
+                n_clips = len(st.session_state.get("job_prompts", []))
+                if not song or not artist:
+                    st.warning(_t(
+                        "请先填写上方的歌曲名称和艺术家。",
+                        "Please enter the song title and artist above first.",
+                    ))
+                else:
+                    with st.spinner(_t(
+                        f"AI 生成 {n_clips} 条 Prompts 中…",
+                        f"Generating {n_clips} prompts with AI…",
+                    )):
+                        try:
+                            generated = expand_prompts(song, artist, n_clips, style)
+                            st.session_state["job_prompts"] = generated
+                            _clear_prompt_widget_keys()
+                            st.success(_t(
+                                "✅ 生成完成！可在下方继续手动编辑。",
+                                "✅ Done! Edit below as needed.",
+                            ))
+                            st.rerun()
+                        except Exception as _e:
+                            st.error(_t(f"AI 生成失败：{_e}", f"AI generation failed: {_e}"))
+    else:
+        st.caption(_t(
+            "💡 在 `.env` 中配置 `ARK_TEXT_ENDPOINT` 可启用 AI 自动生成 Prompts。",
+            "💡 Set `ARK_TEXT_ENDPOINT` in `.env` to enable AI prompt generation.",
+        ))
 
     # ── Prompt editor ─────────────────────────────────────────────────────
     hdr, add_col = st.columns([5, 1])
