@@ -4,6 +4,11 @@ python-dotenv>=1.0.0
 requests>=2.31.0
 pandas>=2.0.0
 
+# FastAPI layer (api/)
+fastapi>=0.110
+uvicorn[standard]>=0.30
+python-multipart>=0.0.9
+
 # ─── Notes ────────────────────────────────────────────────────────────────────
 # The following dependencies are provided by the sibling repos and must be
 # installed in the same Python environment:
