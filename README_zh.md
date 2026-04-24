@@ -21,6 +21,8 @@
 - Video-Editing-FFmpeg-librosa-Whisper-
 - tiktok-uploader-mcp
 
+可选的 FastAPI 接口层（`api/`）将相同业务逻辑以 HTTP API 暴露，独立运行在 8001 端口，不影响 Streamlit。详见 `api/README.md`。
+
 ## 核心功能
 
 | 功能 | 说明 |
@@ -95,6 +97,7 @@ tiktok-dashboard/
   pipeline.py               # 生成/合并/字幕/上传编排
   job_state.py              # 任务状态持久化与断点续传逻辑
   modules/bgm_manager.py    # BGM 文件管理与 BPM 分析
+  api/                      # FastAPI HTTP 接口层（可选）
   requirements.txt          # 面板依赖
   cookies/                  # 本地 cookies（已加入 gitignore）
   tmp/                      # 任务运行时文件（已加入 gitignore）
@@ -157,6 +160,14 @@ streamlit run app.py
 ```
 
 在浏览器打开 Streamlit 输出的本地地址。
+
+### 启动 API 服务（可选）
+
+```powershell
+uvicorn api.main:app --port 8001 --reload
+```
+
+浏览器打开 <http://localhost:8001/docs> 查看 Swagger UI。详见 `api/README.md`。
 
 ## 常见问题
 

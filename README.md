@@ -21,6 +21,8 @@ This dashboard is a UI/orchestration layer on top of sibling repositories:
 - Video-Editing-FFmpeg-librosa-Whisper-
 - tiktok-uploader-mcp
 
+Optional FastAPI layer (`api/`) exposes the same business logic as HTTP endpoints — runs independently on port 8001, does not affect Streamlit. See `api/README.md`.
+
 ## Core Features
 
 | Feature | Description |
@@ -95,6 +97,7 @@ tiktok-dashboard/
 	pipeline.py               # Clip generation / merge / SRT / upload orchestration
 	job_state.py              # Persistent job state and checkpoint logic
 	modules/bgm_manager.py    # BGM file management and BPM analysis
+	api/                      # FastAPI HTTP layer (optional)
 	requirements.txt          # Dashboard dependencies
 	cookies/                  # Local cookies files (ignored by git)
 	tmp/                      # Job runtime files and outputs (ignored by git)
@@ -157,6 +160,14 @@ streamlit run app.py
 ```
 
 Open the local URL shown by Streamlit.
+
+### Run the API (optional)
+
+```powershell
+uvicorn api.main:app --port 8001 --reload
+```
+
+Open <http://localhost:8001/docs> for Swagger UI. See `api/README.md` for details.
 
 ## Troubleshooting
 
